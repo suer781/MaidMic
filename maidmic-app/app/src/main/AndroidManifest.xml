@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MaidMic AndroidManifest.xml
+  ============================================================
+  声明所有的 Activity、Service、权限。
+  
+  三路虚拟麦克风各自需要一个 Service：
+    - MaidMicRootService:  方案A (root AudioFlinger)
+    - MaidMicShizukuService: 方案B (Shizuku AAudio)
+    - MaidMicAccessibilityService: 方案C (无障碍)
+  
+  权限说明：
+    - RECORD_AUDIO: 必须，用于捕获麦克风输入
+    - FOREGROUND_SERVICE: 必须，后台音频处理需要前台通知
+    - BIND_ACCESSIBILITY_SERVICE: 方案C需要
+    - 其他 Shizuku 相关权限
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ============================================================
+         权限声明
+         ============================================================ -->
+
+    <!-- 录音权限（麦克风输入） — 核心权限 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- 前台服务（Android 8+ 后台音频处理需要） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- 通知权限（Android 13+） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 修改音频设置（方案A root 模式可能需要） -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- 网络（插件市场下载、P2P） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Shizuku 权限 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+
+    <!-- 无障碍服务 -->
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+
+    <!-- 读取外部存储（导入/导出预设） -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- ============================================================
+         Application
+         ============================================================ -->
+
+    <application
+        android:name=".MaidMicApp"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="MaidMic"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MaidMic"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="34">
+
+        <!-- ============================================================
+             主 Activity
+             ============================================================ -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.MaidMic">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ============================================================
+             方案 A: Root AudioFlinger 服务
+             通过 root shell 修改 audio_policy_configuration.xml
+             ============================================================ -->
+        <service
+            android:name=".bridge.root.RootMicService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- ============================================================
+             方案 B: Shizuku AAudio 服务
+             通过 Shizuku API 提升权限
+             ============================================================ -->
+        <service
+            android:name=".bridge.shizuku.ShizukuMicService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- Shizuku Provider -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="false"
+            android:multiprocess="false" />
+
+        <!-- ============================================================
+             方案 C: 无障碍服务
+             ============================================================ -->
+        <service
+            android:name=".bridge.accessibility.MaidMicAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <!-- 无障碍配置（在 xml/ 目录下） -->
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+</manifest>
