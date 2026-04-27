@@ -10,6 +10,7 @@ plugins {
 android {
     namespace = "aoeck.dwyai.com"
     compileSdk = 34
+
     defaultConfig {
         applicationId = "aoeck.dwyai.com"
         minSdk = 26  // Android 8.0 — Shizuku 和 AAudio 的最低要求
@@ -19,11 +20,10 @@ android {
 
         // NDK 架构配置
         ndk {
-            // 支持的 ABI：arm64-v8a 为主（现代设备），armeabi-v7a 为兼容
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
 
-        // JNI 库名
+        // JNI 库编译参数
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
@@ -42,11 +42,10 @@ android {
         }
         debug {
             isDebuggable = true
-            // debug 版不改包名，adb install 直接覆盖
         }
     }
 
-    // NDK 编译配置
+    // NDK 编译
     externalNativeBuild {
         cmake {
             path = file("../maidmic-engine/CMakeLists.txt")
@@ -54,7 +53,7 @@ android {
         }
     }
 
-    // Kotlin 和 Compose
+    // Jetpack Compose
     buildFeatures {
         compose = true
     }
@@ -63,7 +62,6 @@ android {
         kotlinCompilerExtensionVersion = "1.5.8"
     }
 
-    // Java 兼容
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -72,17 +70,10 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-
-    // 允许访问 aar（Shizuku）
-    repositories {
-        maven { setUrl("https://jitpack.io") }
-    }
 }
 
 dependencies {
-    // ============================================================
-    // Jetpack Compose — UI 框架
-    // ============================================================
+    // Jetpack Compose
     val composeVersion = "1.6.0"
     implementation("androidx.compose.ui:ui:$composeVersion")
     implementation("androidx.compose.ui:ui-tooling-preview:$composeVersion")
@@ -91,26 +82,17 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.8.2")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
 
-    // ============================================================
     // Android 核心
-    // ============================================================
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
-    implementation("androidx.activity:activity-ktx:1.8.2")
 
-    // ============================================================
-    // Shizuku — 非 root 提权
-    // ============================================================
+    // Shizuku — 非 root 提权（从 jitpack 获取，已在 settings.gradle.kts 中配置）
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
-    // ============================================================
     // LuaJ — Lua 插件运行时
-    // ============================================================
     implementation("org.luaj:luaj-jse:3.0.1")
 
-    // ============================================================
     // 测试
-    // ============================================================
     testImplementation("junit:junit:4.13.2")
 }
