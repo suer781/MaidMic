@@ -1,0 +1,35 @@
+# MaidMic .gitignore
+
+# Build outputs
+**/build/
+**/bin/
+**/obj/
+**/out/
+*.o
+*.so
+*.a
+
+# IDE
+.idea/
+*.iml
+.gradle/
+local.properties
+
+# Go
+maidmic-p2p/vendor/
+maidmic-p2p/bin/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.tmp
+
+# Large downloads
+*.apk
