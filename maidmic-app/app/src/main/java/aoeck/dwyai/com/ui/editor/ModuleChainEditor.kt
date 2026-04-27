@@ -13,7 +13,7 @@
 // 两种模式下，用户双击任意参数值可以直接输入数字——不限制范围。
 // 滑块有建议范围，但"自定义输入"框没有限制。
 
-package com.maidmic.ui.editor
+package aoeck.dwyai.com.ui.editor
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.*

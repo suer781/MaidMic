@@ -8,11 +8,10 @@ plugins {
 }
 
 android {
-    namespace = "com.maidmic"
+    namespace = "aoeck.dwyai.com"
     compileSdk = 34
-
     defaultConfig {
-        applicationId = "com.maidmic.app"
+        applicationId = "aoeck.dwyai.com"
         minSdk = 26  // Android 8.0 — Shizuku 和 AAudio 的最低要求
         targetSdk = 34
         versionCode = 1

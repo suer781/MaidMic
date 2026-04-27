@@ -3,7 +3,7 @@
 // 通过 Shizuku 提权 + AAudio 环回实现虚拟麦克风。
 // 作为前台服务运行，保活。
 
-package com.maidmic.bridge.shizuku
+package aoeck.dwyai.com.bridge.shizuku
 
 import android.app.Notification
 import android.app.NotificationChannel

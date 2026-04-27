@@ -8,7 +8,7 @@
 // 内容涉及 UGC 插件系统、P2P/PCDN、原生代码执行等风险。
 // 我们要确保用户真的读过并理解了。
 
-package com.maidmic.ui.settings.developer
+package aoeck.dwyai.com.ui.settings.developer
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState

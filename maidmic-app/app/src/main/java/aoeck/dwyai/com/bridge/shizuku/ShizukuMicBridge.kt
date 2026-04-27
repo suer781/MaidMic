@@ -13,7 +13,7 @@
 // 它能做的比 root 少，但胜在不需要解锁、不需要刷机。
 // 对于 Android 10+ 设备，这是最实用的方案。
 
-package com.maidmic.bridge.shizuku
+package aoeck.dwyai.com.bridge.shizuku
 
 import android.content.Context
 import android.media.AudioAttributes

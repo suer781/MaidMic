@@ -2,7 +2,7 @@
 // ============================================================
 // 应用启动时初始化 Shizuku、日志系统、Echio 引擎加载
 
-package com.maidmic
+package aoeck.dwyai.com
 
 import android.app.Application
 import android.util.Log

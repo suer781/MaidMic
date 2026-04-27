@@ -24,7 +24,7 @@
 //   │  └─────────────────────────────────┘    │
 //   └─────────────────────────────────────────┘
 
-package com.maidmic.ui.plugins
+package aoeck.dwyai.com.ui.plugins
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -106,7 +106,7 @@ fun getPermissionBadge(level: Int): PermissionBadge = when (level) {
 
 val MOCK_PLUGINS = listOf(
     PluginMarketItem(
-        id = "com.maidmic.plugin.loli",
+        id = "aoeck.dwyai.com.plugin.loli",
         name = "萝莉变声器 Pro",
         description = "一键切换到萝莉音色。基于 PSOLA 变调 + 共振峰偏移，支持实时微调。",
         author = "MaidMic Team",
@@ -123,7 +123,7 @@ val MOCK_PLUGINS = listOf(
         installedVersion = null
     ),
     PluginMarketItem(
-        id = "com.maidmic.plugin.electro",
+        id = "aoeck.dwyai.com.plugin.electro",
         name = "电音狂魔",
         description = "魔性电音效果器。实时音高量化 + 混响，直播神器。",
         author = "AudioDev",
@@ -140,7 +140,7 @@ val MOCK_PLUGINS = listOf(
         installedVersion = "1.0.0"
     ),
     PluginMarketItem(
-        id = "com.maidmic.plugin.reverb",
+        id = "aoeck.dwyai.com.plugin.reverb",
         name = "大厅混响",
         description = "模拟大厅、教堂、浴室等多种空间混响效果。可调房间大小、衰减时间。",
         author = "MaidMic Team",
@@ -157,7 +157,7 @@ val MOCK_PLUGINS = listOf(
         installedVersion = null
     ),
     PluginMarketItem(
-        id = "com.maidmic.plugin.eq10",
+        id = "aoeck.dwyai.com.plugin.eq10",
         name = "十段均衡器",
         description = "专业级 10 段图形均衡器。可拖拽曲线调整频率响应。",
         author = "CommunityUser",
@@ -174,7 +174,7 @@ val MOCK_PLUGINS = listOf(
         installedVersion = "0.8.0"
     ),
     PluginMarketItem(
-        id = "com.maidmic.plugin.deepvoice",
+        id = "aoeck.dwyai.com.plugin.deepvoice",
         name = "大叔声线",
         description = "让你的声音瞬间变成沉稳大叔。共振峰下移 + 低频增强。",
         author = "VoiceMagic",
@@ -191,7 +191,7 @@ val MOCK_PLUGINS = listOf(
         installedVersion = null
     ),
     PluginMarketItem(
-        id = "com.maidmic.plugin.distortion",
+        id = "aoeck.dwyai.com.plugin.distortion",
         name = "失真吉他",
         description = "吉他失真效果器。过载、法兹、金属三种失真模式。需要原生权限加载 .so。",
         author = "GuitarFX",
@@ -208,7 +208,7 @@ val MOCK_PLUGINS = listOf(
         installedVersion = null
     ),
     PluginMarketItem(
-        id = "com.maidmic.plugin.highrisk",
+        id = "aoeck.dwyai.com.plugin.highrisk",
         name = "系统音频工具",
         description = "底层音频调试工具。可以加载自定义 ALSA 配置。高危权限！",
         author = "UnknownDev",

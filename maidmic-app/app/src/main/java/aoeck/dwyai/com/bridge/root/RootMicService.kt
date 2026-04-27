@@ -3,7 +3,7 @@
 // 通过 root shell 修改 AudioFlinger 配置。
 // 需要已 root 设备。
 
-package com.maidmic.bridge.root
+package aoeck.dwyai.com.bridge.root
 
 import android.app.Notification
 import android.app.NotificationChannel

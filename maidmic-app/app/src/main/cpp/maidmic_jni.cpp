@@ -42,7 +42,7 @@ extern "C" {
 // 创建引擎实例
 // 对应 Kotlin: nativeCreateEngine(sampleRate, channels, bitDepth, bufferSize)
 JNIEXPORT jlong JNICALL
-Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeCreateEngine(
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeCreateEngine(
     JNIEnv* env, jobject /*thiz*/,
     jint sample_rate, jint channels, jint bit_depth, jint /*buffer_size*/
 ) {
@@ -68,7 +68,7 @@ Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeCreateEngine(
 
 // 销毁引擎
 JNIEXPORT void JNICALL
-Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeDestroyEngine(
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeDestroyEngine(
     JNIEnv* env, jobject /*thiz*/, jlong engine_ptr
 ) {
     auto* pipeline = reinterpret_cast<maidmic_pipeline_t*>(engine_ptr);
@@ -83,7 +83,7 @@ Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeDestroyEngine(
 
 // 从 RingBuffer 读取音频（处理后的）
 JNIEXPORT jint JNICALL
-Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeReadAudio(
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeReadAudio(
     JNIEnv* env, jobject /*thiz*/, jlong engine_ptr,
     jbyteArray buffer, jint frame_count
 ) {
@@ -102,7 +102,7 @@ Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeReadAudio(
 
 // 更新音频配置
 JNIEXPORT void JNICALL
-Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeUpdateConfig(
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeUpdateConfig(
     JNIEnv* env, jobject /*thiz*/, jlong engine_ptr,
     jint sample_rate, jint channels, jint bit_depth, jint buffer_size
 ) {
@@ -116,7 +116,7 @@ Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeUpdateConfig(
 
 // 获取延迟估计
 JNIEXPORT jfloat JNICALL
-Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeGetLatencyMs(
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeGetLatencyMs(
     JNIEnv* env, jobject /*thiz*/, jlong engine_ptr
 ) {
     auto* pipeline = reinterpret_cast<maidmic_pipeline_t*>(engine_ptr);
@@ -131,7 +131,7 @@ Java_com_maidmic_bridge_shizuku_ShizukuMicBridge_nativeGetLatencyMs(
 // ============================================================
 
 JNIEXPORT jdouble JNICALL
-Java_com_maidmic_plugins_lua_LuaPluginSandbox_nativeGetEngineParam(
+Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeGetEngineParam(
     JNIEnv* env, jobject /*thiz*/, jstring key
 ) {
     const char* key_str = env->GetStringUTFChars(key, nullptr);
@@ -141,7 +141,7 @@ Java_com_maidmic_plugins_lua_LuaPluginSandbox_nativeGetEngineParam(
 }
 
 JNIEXPORT void JNICALL
-Java_com_maidmic_plugins_lua_LuaPluginSandbox_nativeSetEngineParam(
+Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeSetEngineParam(
     JNIEnv* env, jobject /*thiz*/, jstring key, jfloat value
 ) {
     const char* key_str = env->GetStringUTFChars(key, nullptr);
@@ -151,7 +151,7 @@ Java_com_maidmic_plugins_lua_LuaPluginSandbox_nativeSetEngineParam(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_maidmic_plugins_lua_LuaPluginSandbox_nativeLoadPreset(
+Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeLoadPreset(
     JNIEnv* env, jobject /*thiz*/, jstring plugin_id, jstring preset_name
 ) {
     (void)plugin_id;
@@ -164,7 +164,7 @@ Java_com_maidmic_plugins_lua_LuaPluginSandbox_nativeLoadPreset(
 // ============================================================
 
 JNIEXPORT void JNICALL
-Java_com_maidmic_bridge_root_RootMicBridge_nativeProcess(
+Java_aoeck_dwyai_com_bridge_root_RootMicBridge_nativeProcess(
     JNIEnv* env, jobject /*thiz*/, jlong engine_ptr,
     jbyteArray input, jbyteArray output, jint size
 ) {
@@ -194,7 +194,7 @@ Java_com_maidmic_bridge_root_RootMicBridge_nativeProcess(
 }
 
 JNIEXPORT jint JNICALL
-Java_com_maidmic_bridge_root_RootMicBridge_nativeWriteToVirtualDevice(
+Java_aoeck_dwyai_com_bridge_root_RootMicBridge_nativeWriteToVirtualDevice(
     JNIEnv* env, jobject /*thiz*/, jint fd, jbyteArray data, jint size
 ) {
     (void)env;

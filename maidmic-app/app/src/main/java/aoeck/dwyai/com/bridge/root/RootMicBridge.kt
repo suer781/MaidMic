@@ -15,7 +15,7 @@
 // 需要：已 root 设备 + Superuser 权限
 // 兼容性：Android 10+（不同厂商的 audio HAL 实现有差异）
 
-package com.maidmic.bridge.root
+package aoeck.dwyai.com.bridge.root
 
 import android.content.Context
 import android.media.AudioFormat

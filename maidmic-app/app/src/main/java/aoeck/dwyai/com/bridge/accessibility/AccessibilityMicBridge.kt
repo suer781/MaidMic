@@ -17,7 +17,7 @@
 // 所以方案 C 实际上是一个"转发方案"，延迟较高（80~200ms）。
 // 适合对延迟不敏感的场景（直播推流、录制后期处理）。
 
-package com.maidmic.bridge.accessibility
+package aoeck.dwyai.com.bridge.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo

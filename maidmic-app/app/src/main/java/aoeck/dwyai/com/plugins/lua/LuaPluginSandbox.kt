@@ -13,7 +13,7 @@
 //
 // 权限在插件 manifest 中声明，用户安装时看到。
 
-package com.maidmic.plugins.lua
+package aoeck.dwyai.com.plugins.lua
 
 import android.util.Log
 import org.luaj.vm2.*

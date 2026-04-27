@@ -3,7 +3,7 @@
 // 主 Activity，搭载 Jetpack Compose UI。
 // 包含底部导航：主控台、模块链编辑器、插件市场、设置
 
-package com.maidmic
+package aoeck.dwyai.com
 
 import android.Manifest
 import android.content.Intent
@@ -23,10 +23,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
-import com.maidmic.ui.editor.ModuleChainEditor
-import com.maidmic.ui.editor.PipelineNode
-import com.maidmic.ui.plugins.PluginMarketPage
-import com.maidmic.ui.settings.developer.DeveloperSettingsPage
+import aoeck.dwyai.com.ui.editor.ModuleChainEditor
+import aoeck.dwyai.com.ui.editor.PipelineNode
+import aoeck.dwyai.com.ui.plugins.PluginMarketPage
+import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
 
 // ============================================================
 // 底部导航项
