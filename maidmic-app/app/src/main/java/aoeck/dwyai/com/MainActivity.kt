@@ -338,12 +338,26 @@ private val eqPresets = listOf(
 
 @Composable
 fun EqPage(context: Context) {
-    var selectedPreset by remember { mutableStateOf(0) }
-    var gain by remember { mutableFloatStateOf(eqPresets[0].gain) }
-    var bass by remember { mutableFloatStateOf(eqPresets[0].bass) }
-    var treble by remember { mutableFloatStateOf(eqPresets[0].treble) }
-    var reverb by remember { mutableFloatStateOf(eqPresets[0].reverb) }
-    var pitch by remember { mutableIntStateOf(eqPresets[0].pitch) }
+    val prefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+
+    var selectedPreset by remember { mutableIntStateOf(prefs.getInt("preset", 0)) }
+    var gain by remember { mutableFloatStateOf(prefs.getFloat("gain", 0f)) }
+    var bass by remember { mutableFloatStateOf(prefs.getFloat("bass", 0f)) }
+    var treble by remember { mutableFloatStateOf(prefs.getFloat("treble", 0f)) }
+    var reverb by remember { mutableFloatStateOf(prefs.getFloat("reverb", 0f)) }
+    var pitch by remember { mutableIntStateOf(prefs.getInt("pitch", 0)) }
+
+    // 每次变化自动保存
+    fun save() {
+        prefs.edit()
+            .putInt("preset", selectedPreset)
+            .putFloat("gain", gain)
+            .putFloat("bass", bass)
+            .putFloat("treble", treble)
+            .putFloat("reverb", reverb)
+            .putInt("pitch", pitch)
+            .apply()
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
         Text("MaidMic", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -355,19 +369,19 @@ fun EqPage(context: Context) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             eqPresets.forEachIndexed { i, preset ->
                 FilterChip(selected = i == selectedPreset, onClick = {
-                    selectedPreset = i; gain = preset.gain; bass = preset.bass; treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch
+                    selectedPreset = i; gain = preset.gain; bass = preset.bass; treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch; save()
                 }, label = { Text(preset.name, fontSize = 12.sp) },
                     colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFBB86FC), selectedLabelColor = Color.Black))
             }
         }
 
         Spacer(Modifier.height(20.dp))
-        EqSlider("音量增益", gain, -10f..10f) { gain = it }
-        EqSlider("低音", bass, -10f..10f) { bass = it }
-        EqSlider("高音", treble, -10f..10f) { treble = it }
-        EqSlider("混响", reverb, 0f..1f) { reverb = it }
+        EqSlider("音量增益", gain, -10f..10f) { gain = it; save() }
+        EqSlider("低音", bass, -10f..10f) { bass = it; save() }
+        EqSlider("高音", treble, -10f..10f) { treble = it; save() }
+        EqSlider("混响", reverb, 0f..1f) { reverb = it; save() }
         Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-        Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt() }, valueRange = -12f..12f, steps = 23)
+        Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt(); save() }, valueRange = -12f..12f, steps = 23)
     }
 }
 

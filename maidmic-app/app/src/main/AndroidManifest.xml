@@ -28,6 +28,7 @@
     <!-- 前台服务（Android 8+ 后台音频处理需要） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- 通知权限（Android 13+） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -118,6 +119,14 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- ============================================================
+             保活前台服务
+             ============================================================ -->
+        <service
+            android:name=".MaidMicKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
 
     </application>
 </manifest>

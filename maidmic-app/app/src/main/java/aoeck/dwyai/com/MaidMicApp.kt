@@ -5,6 +5,8 @@
 package aoeck.dwyai.com
 
 import android.app.Application
+import android.content.Intent
+import android.os.Build
 import android.util.Log
 import rikka.shizuku.Shizuku
 
@@ -22,11 +24,28 @@ class MaidMicApp : Application() {
         
         Log.i(TAG, "MaidMic starting...")
         
+        // 启动前台保活服务
+        startKeepAliveService()
+        
         // 加载 Echio 引擎 native 库
         initNativeEngine()
         
-        // 检查 Shizuku 状态（但不请求权限——让用户在设置页面操作）
+        // 检查 Shizuku 状态
         checkShizuku()
+    }
+
+    private fun startKeepAliveService() {
+        try {
+            val intent = Intent(this, MaidMicKeepAliveService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+            Log.i(TAG, "Keep-alive service started")
+        } catch (e: Exception) {
+            Log.w(TAG, "Keep-alive service failed: ${e.message}")
+        }
     }
 
     private fun initNativeEngine() {
