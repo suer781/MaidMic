@@ -154,7 +154,7 @@ fun MaidMicMain() {
                         selected = currentNav == item,
                         onClick = { currentNav = item },
                         icon = { Icon(item.icon, contentDescription = item.label) },
-                        label = { Text(item.label, fontSize = sp(11)) }
+                        label = { Text(item.label, fontSize = 11.sp) }
                     )
                 }
             }
@@ -236,7 +236,7 @@ fun DashboardPage() {
                         Text(
                             badge,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            fontSize = sp(12)
+                            fontSize = 12.sp
                         )
                     }
                 }
@@ -285,7 +285,7 @@ fun SettingsPage(onOpenDeveloperSettings: () -> Unit) {
                 Column {
                     Text("开发者选项", fontWeight = FontWeight.Medium)
                     Text("版本 0.1.0-alpha（点击 7 次进入）", 
-                         fontSize = sp(12),
+                         fontSize = 12.sp,
                          color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -295,7 +295,7 @@ fun SettingsPage(onOpenDeveloperSettings: () -> Unit) {
         
         Text(
             "更多设置项即将推出",
-            fontSize = sp(12),
+            fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }

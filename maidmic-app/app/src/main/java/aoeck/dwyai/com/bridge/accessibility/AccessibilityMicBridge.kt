@@ -255,7 +255,7 @@ class MaidMicAccessibilityService : AccessibilityService() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MaidMic")
             .setContentText("Virtual microphone is active (Accessibility mode)")
-            .setSmallIcon(android.R.drawable.ic_menu_sound)
+            .setSmallIcon(android.R.drawable.ic_media_play)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()

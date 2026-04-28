@@ -59,7 +59,7 @@ class RootMicService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MaidMic")
             .setContentText("Virtual mic (Root mode)")
-            .setSmallIcon(android.R.drawable.ic_menu_sound)
+            .setSmallIcon(android.R.drawable.ic_media_play)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()

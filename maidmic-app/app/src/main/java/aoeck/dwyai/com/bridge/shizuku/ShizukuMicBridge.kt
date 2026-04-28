@@ -16,6 +16,7 @@
 package aoeck.dwyai.com.bridge.shizuku
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -172,7 +173,7 @@ class ShizukuMicBridge(private val context: Context) {
      * 4. AudioTrack 的音频被系统视为"媒体音频"，其他 App 可以拾取
      */
     fun start() {
-        if (status != ShizukuStatus.READY || !nativeEnginePtr != 0L) {
+        if (status != ShizukuStatus.READY || nativeEnginePtr == 0L) {
             Log.e(TAG, "Cannot start: not ready")
             return
         }
