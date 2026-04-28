@@ -1,26 +1,27 @@
 // MainActivity.kt — MaidMic 主界面
 // ============================================================
-// 主 Activity，搭载 Jetpack Compose UI。
-// 包含：权限引导 → EQ 主控台 → 底部导航（基础/关于 + 开发者专属）
+// 主 Activity：引导页 → EQ 主控台 → 底部导航 + 设置页
 
 package aoeck.dwyai.com
 
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -45,7 +46,7 @@ import aoeck.dwyai.com.ui.plugins.PluginMarketPage
 import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
 
 // ============================================================
-// 底部导航项
+// 导航项
 // ============================================================
 
 sealed class NavItem(val label: String, val icon: ImageVector) {
@@ -55,19 +56,14 @@ sealed class NavItem(val label: String, val icon: ImageVector) {
     object About : NavItem("关于", Icons.Default.Info)
 }
 
+private const val PREFS_NAME = "maidmic_prefs"
+private const val KEY_ONBOARDING_DONE = "onboarding_done"
+private const val KEY_DEV_MODE = "dev_mode"
+private const val KEY_UGC_ENABLED = "ugc_enabled"
+
 class MainActivity : ComponentActivity() {
-
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            Toast.makeText(this, "录音权限已授予", Toast.LENGTH_SHORT).show()
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         setContent {
             MaidMicTheme {
                 MaidMicMain(context = this@MainActivity)
@@ -100,38 +96,34 @@ fun MaidMicTheme(content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MaidMicMain(context: Context) {
-    val prefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    // 首次启动引导
-    var showOnboarding by remember { mutableStateOf(!prefs.getBoolean("onboarding_done", false)) }
-
-    // 当前导航项
+    var showOnboarding by remember { mutableStateOf(!prefs.getBoolean(KEY_ONBOARDING_DONE, false)) }
     var currentNav: NavItem by remember { mutableStateOf(NavItem.Basic) }
-
-    // 管线模块列表
     var pipelineNodes by remember { mutableStateOf(listOf<PipelineNode>()) }
     var isDagMode by remember { mutableStateOf(false) }
-    var isUgcEnabled by remember { mutableStateOf(false) }
+    var isUgcEnabled by remember { mutableStateOf(prefs.getBoolean(KEY_UGC_ENABLED, false)) }
     var showDeveloperSettings by remember { mutableStateOf(false) }
-    var devModeEnabled by remember { mutableStateOf(prefs.getBoolean("dev_mode", false)) }
+    var devModeEnabled by remember { mutableStateOf(prefs.getBoolean(KEY_DEV_MODE, false)) }
+    var showSettings by remember { mutableStateOf(false) }
+    var showEditor by remember { mutableStateOf(false) }
 
-    // ============================================================
-    // 引导页
-    // ============================================================
+    // 保存 UGC 状态
+    LaunchedEffect(isUgcEnabled) {
+        prefs.edit().putBoolean(KEY_UGC_ENABLED, isUgcEnabled).apply()
+    }
+
     if (showOnboarding) {
         OnboardingPage(
             context = context,
             onDone = {
-                prefs.edit().putBoolean("onboarding_done", true).apply()
+                prefs.edit().putBoolean(KEY_ONBOARDING_DONE, true).apply()
                 showOnboarding = false
             }
         )
         return
     }
 
-    // ============================================================
-    // 开发者选项页面
-    // ============================================================
     if (showDeveloperSettings) {
         DeveloperSettingsPage(
             isChinese = true,
@@ -140,6 +132,43 @@ fun MaidMicMain(context: Context) {
             currentEditorMode = if (isDagMode) "dag" else "simple",
             onEditorModeChange = { mode -> isDagMode = mode == "dag" },
             onBack = { showDeveloperSettings = false }
+        )
+        return
+    }
+
+    // 设置页面
+    if (showSettings) {
+        SettingsPage(
+            isUgcEnabled = isUgcEnabled,
+            onUgcToggle = { isUgcEnabled = it },
+            showEditor = showEditor,
+            onShowEditor = { showEditor = it },
+            onBack = { showSettings = false },
+            onOpenDeveloperSettings = {
+                showSettings = false
+                showDeveloperSettings = true
+                prefs.edit().putBoolean(KEY_DEV_MODE, true).apply()
+                devModeEnabled = true
+            }
+        )
+        return
+    }
+
+    // 模块链编辑器（作为全屏页面打开）
+    if (showEditor) {
+        ModuleChainEditor(
+            isDagMode = isDagMode,
+            nodes = pipelineNodes,
+            onAddModule = { },
+            onRemoveModule = { id -> pipelineNodes = pipelineNodes.filter { it.nodeId != id } },
+            onReorderModule = { _, _ -> },
+            onToggleBypass = { id ->
+                pipelineNodes = pipelineNodes.map {
+                    if (it.nodeId == id) it.copy(bypass = !it.bypass) else it
+                }
+            },
+            onParamChange = { _, _, _ -> },
+            onBack = { showEditor = false }
         )
         return
     }
@@ -191,9 +220,10 @@ fun MaidMicMain(context: Context) {
                     context = context,
                     onOpenDeveloperSettings = {
                         showDeveloperSettings = true
-                        prefs.edit().putBoolean("dev_mode", true).apply()
+                        prefs.edit().putBoolean(KEY_DEV_MODE, true).apply()
                         devModeEnabled = true
-                    }
+                    },
+                    onOpenSettings = { showSettings = true }
                 )
             }
         }
@@ -201,104 +231,68 @@ fun MaidMicMain(context: Context) {
 }
 
 // ============================================================
-// 引导页 — 权限配置
+// 引导页 — 自动请求权限 + 模式选择
 // ============================================================
 
 @Composable
 fun OnboardingPage(context: Context, onDone: () -> Unit) {
+    // 自动请求：录音 + 通知
     val micLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) Toast.makeText(context, "录音权限已授予", Toast.LENGTH_SHORT).show()
-    }
+    ) { }
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+
     val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    val hasNotification = if (Build.VERSION.SDK_INT >= 33)
+    val hasNotif = if (Build.VERSION.SDK_INT >= 33)
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     else true
 
+    // 自动请求权限
+    LaunchedEffect(Unit) {
+        if (!hasMic) micLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        if (!hasNotif && Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF121212)),
+        modifier = Modifier.fillMaxSize().background(Color(0xFF121212)),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(32.dp)
-        ) {
-            Icon(
-                Icons.Default.Mic,
-                contentDescription = null,
-                modifier = Modifier.size(72.dp),
-                tint = Color(0xFFBB86FC)
-            )
-            Spacer(Modifier.height(16.dp))
-            Text("欢迎使用 MaidMic", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "使用前请授予必要权限",
-                fontSize = 14.sp,
-                color = Color(0xFF999999),
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(32.dp))
-
-            // 麦克风权限
-            PermissionCard(
-                icon = Icons.Default.Mic,
-                title = "录音权限",
-                desc = "捕获麦克风音频输入",
-                granted = hasMic,
-                onClick = {
-                    if (!hasMic) {
-                        micLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                    } else {
-                        Toast.makeText(context, "权限已授予", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+            Icon(Icons.Default.Mic, null, modifier = Modifier.size(72.dp), tint = Color(0xFFBB86FC))
             Spacer(Modifier.height(12.dp))
+            Text("MaidMic", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text("虚拟麦克风 · Echio 引擎", fontSize = 13.sp, color = Color(0xFF999999))
+            Spacer(Modifier.height(24.dp))
 
-            // 通知权限
+            // 权限状态
+            PermissionRow("录音权限", if (hasMic) "✓ 已授予" else "请求中...", if (hasMic) Color.Green else Color(0xFFBB86FC))
             if (Build.VERSION.SDK_INT >= 33) {
-                PermissionCard(
-                    icon = Icons.Default.Notifications,
-                    title = "通知权限",
-                    desc = "后台音频处理通知",
-                    granted = hasNotification,
-                    onClick = {
-                        if (!hasNotification) {
-                            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        } else {
-                            Toast.makeText(context, "权限已授予", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(8.dp))
+                PermissionRow("通知权限", if (hasNotif) "✓ 已授予" else "请求中...", if (hasNotif) Color.Green else Color(0xFFBB86FC))
             }
 
-            // Shizuku 提示
-            PermissionCard(
-                icon = Icons.Default.Security,
-                title = "Shizuku（可选）",
-                desc = "方案B需要·建议安装",
-                granted = false,
-                onClick = {
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/")))
-                    } catch (_: Exception) { }
-                }
-            )
-            Spacer(Modifier.height(32.dp))
+            Spacer(Modifier.height(24.dp))
+            Text("选择虚拟麦克风方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFCCCCCC))
+            Spacer(Modifier.height(12.dp))
 
-            Button(
-                onClick = onDone,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBB86FC))
-            ) {
+            // 三种方案（可点击跳转配置）
+            MicModeCard("方案A: Root AudioFlinger", "需 root 权限", Icons.Default.Lock) {
+                Toast.makeText(context, "Root 模式需要 ROOT 权限", Toast.LENGTH_SHORT).show()
+            }
+            Spacer(Modifier.height(8.dp))
+            MicModeCard("方案B: Shizuku AAudio", "推荐 · 非 root", Icons.Default.Security) {
+                try { Shizuku.requestPermission(0); Toast.makeText(context, "请求 Shizuku 权限...", Toast.LENGTH_SHORT).show() }
+                catch (_: Exception) { Toast.makeText(context, "Shizuku 未安装", Toast.LENGTH_SHORT).show() }
+            }
+            Spacer(Modifier.height(8.dp))
+            MicModeCard("方案C: 无障碍服务", "最兼容", Icons.Default.Visibility) {
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+
+            Spacer(Modifier.height(24.dp))
+            Button(onClick = onDone, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBB86FC))) {
                 Text("开始使用", color = Color.Black, fontWeight = FontWeight.Bold)
             }
         }
@@ -306,35 +300,30 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
 }
 
 @Composable
-fun PermissionCard(icon: ImageVector, title: String, desc: String, granted: Boolean, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = if (granted) Color(0xFF1B5E20) else Color(0xFF1E1E1E)
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(icon, contentDescription = null, tint = if (granted) Color.Green else Color.White)
+fun PermissionRow(label: String, value: String, valueColor: Color) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, fontSize = 14.sp, color = Color.White)
+        Text(value, fontSize = 14.sp, color = valueColor, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+fun MicModeCard(title: String, desc: String, icon: ImageVector, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = Color(0xFFBB86FC), modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Medium, color = Color.White, fontSize = 14.sp)
-                Text(desc, fontSize = 12.sp, color = Color(0xFF999999))
+                Text(title, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                Text(desc, fontSize = 12.sp, color = Color(0xFF888888))
             }
-            Text(
-                if (granted) "✓" else "→",
-                color = if (granted) Color.Green else Color(0xFFBB86FC),
-                fontWeight = FontWeight.Bold
-            )
+            Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF666666), modifier = Modifier.size(20.dp))
         }
     }
 }
 
 // ============================================================
-// EQ 调节页面
+// EQ 调节页面（保持不变）
 // ============================================================
 
 data class EqPreset(val name: String, val gain: Float, val bass: Float, val treble: Float, val reverb: Float, val pitch: Int)
@@ -357,129 +346,161 @@ fun EqPage(context: Context) {
     var reverb by remember { mutableFloatStateOf(eqPresets[0].reverb) }
     var pitch by remember { mutableIntStateOf(eqPresets[0].pitch) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(20.dp)
-    ) {
-        // 标题
+    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
         Text("MaidMic", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text("虚拟麦克风 · Echio 引擎", fontSize = 12.sp, color = Color(0xFF999999))
         Spacer(Modifier.height(16.dp))
 
-        // 预设选择
         Text("预设", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             eqPresets.forEachIndexed { i, preset ->
-                FilterChip(
-                    selected = i == selectedPreset,
-                    onClick = {
-                        selectedPreset = i
-                        gain = preset.gain
-                        bass = preset.bass
-                        treble = preset.treble
-                        reverb = preset.reverb
-                        pitch = preset.pitch
-                    },
-                    label = { Text(preset.name, fontSize = 12.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFBB86FC),
-                        selectedLabelColor = Color.Black
-                    )
-                )
+                FilterChip(selected = i == selectedPreset, onClick = {
+                    selectedPreset = i; gain = preset.gain; bass = preset.bass; treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch
+                }, label = { Text(preset.name, fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFBB86FC), selectedLabelColor = Color.Black))
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-
-        // 音量增益
-        Text("音量增益", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-        Slider(value = gain, onValueChange = { gain = it }, valueRange = -10f..10f, steps = 19)
-        Spacer(Modifier.height(8.dp))
-
-        // 低音
-        Text("低音", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-        Slider(value = bass, onValueChange = { bass = it }, valueRange = -10f..10f, steps = 19)
-        Spacer(Modifier.height(8.dp))
-
-        // 高音
-        Text("高音", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-        Slider(value = treble, onValueChange = { treble = it }, valueRange = -10f..10f, steps = 19)
-        Spacer(Modifier.height(8.dp))
-
-        // 混响
-        Text("混响", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-        Slider(value = reverb, onValueChange = { reverb = it }, valueRange = 0f..1f, steps = 9)
-        Spacer(Modifier.height(8.dp))
-
-        // 变调
+        Spacer(Modifier.height(20.dp))
+        EqSlider("音量增益", gain, -10f..10f) { gain = it }
+        EqSlider("低音", bass, -10f..10f) { bass = it }
+        EqSlider("高音", treble, -10f..10f) { treble = it }
+        EqSlider("混响", reverb, 0f..1f) { reverb = it }
         Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
         Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt() }, valueRange = -12f..12f, steps = 23)
+    }
+}
+
+@Composable
+fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+    Text(label, fontSize = 13.sp, color = Color(0xFFBBBBBB))
+    Slider(value = value, onValueChange = onChange, valueRange = range, steps = 19)
+    Spacer(Modifier.height(6.dp))
+}
+
+// ============================================================
+// 设置页面（权限、外观、模块链入口）
+// ============================================================
+// 设置页面（权限、外观、模块链入口）
+@Composable
+fun SettingsPage(
+    isUgcEnabled: Boolean,
+    onUgcToggle: (Boolean) -> Unit,
+    showEditor: Boolean,
+    onShowEditor: (Boolean) -> Unit,
+    onBack: () -> Unit,
+    onOpenDeveloperSettings: () -> Unit = {}
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+        // 顶栏
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
+            Spacer(Modifier.width(8.dp))
+            Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        }
 
         Spacer(Modifier.height(16.dp))
 
-        // 模式选择卡片（轻量）
-        val micMethods = listOf(
-            Triple("方案A: Root AudioFlinger", "需 root", "root"),
-            Triple("方案B: Shizuku AAudio", "推荐", "shizuku"),
-            Triple("方案C: 无障碍服务", "最兼容", "accessibility")
-        )
-        micMethods.forEach { (name, badge, mode) ->
+        // 权限配置
+        Text("音频方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+
+        val context = LocalContext.current
+        SettingsCard(icon = Icons.Default.Lock, title = "Root AudioFlinger", desc = "需要 ROOT 权限") {
+            Toast.makeText(context, "Root 模式待实现", Toast.LENGTH_SHORT).show()
+        }
+        Spacer(Modifier.height(6.dp))
+        SettingsCard(icon = Icons.Default.Security, title = "Shizuku AAudio", desc = "推荐 · 非 root") {
+            try { Shizuku.requestPermission(0); Toast.makeText(context, "请求 Shizuku 权限...", Toast.LENGTH_SHORT).show() }
+            catch (_: Exception) { Toast.makeText(context, "Shizuku 未安装", Toast.LENGTH_SHORT).show() }
+        }
+        Spacer(Modifier.height(6.dp))
+        SettingsCard(icon = Icons.Default.Visibility, title = "无障碍服务", desc = "最兼容") {
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // 模块链编辑器（仅在 UGC 插件开启时显示）
+        if (isUgcEnabled) {
+            Text("编辑器", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+            Spacer(Modifier.height(8.dp))
             Card(
-                onClick = {
-                    when (mode) {
-                        "shizuku" -> {
-                            try {
-                                Shizuku.requestPermission(0)
-                                Toast.makeText(context, "请求 Shizuku 权限...", Toast.LENGTH_SHORT).show()
-                            } catch (_: Exception) {
-                                Toast.makeText(context, "Shizuku 未安装", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                        "root" -> Toast.makeText(context, "Root 模式需要 ROOT 权限", Toast.LENGTH_LONG).show()
-                        "accessibility" -> {
-                            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                onClick = { onShowEditor(true) },
+                modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
             ) {
-                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(name, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                    Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFF2A2A2A)) {
-                        Text(badge, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), fontSize = 11.sp, color = Color(0xFFBB86FC))
+                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Tune, null, tint = Color(0xFFBB86FC))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("模块链编辑器", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                        Text("编排 DSP 处理顺序", fontSize = 12.sp, color = Color(0xFF888888))
                     }
+                    Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF666666))
                 }
             }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // 开发者选项入口
+        Text("其他", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+        SettingsCard(icon = Icons.Default.DeveloperMode, title = "开发者选项", desc = "高级功能 · 谨慎操作") {
+            onOpenDeveloperSettings()
+        }
+    }
+}
+
+@Composable
+fun SettingsCard(icon: ImageVector, title: String, desc: String, onClick: () -> Unit) {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
+        Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, null, tint = Color(0xFFBB86FC), modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                Text(desc, fontSize = 12.sp, color = Color(0xFF888888))
+            }
+            Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF666666))
         }
     }
 }
 
 // ============================================================
-// 关于页面（紧凑、不可滚动）
+// 关于页面（紧凑、不可滚动、右上角齿轮）
 // ============================================================
 
 @Composable
-fun AboutPage(context: Context, onOpenDeveloperSettings: () -> Unit) {
+fun AboutPage(context: Context, onOpenDeveloperSettings: () -> Unit, onOpenSettings: () -> Unit) {
     var devClickCount by remember { mutableIntStateOf(0) }
+    var shizukuStatus by remember { mutableStateOf(checkShizukuStatus()) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // 应用图标（点击11次进入开发者界面）
+    // 监听 Shizuku 授权状态变化
+    DisposableEffect(Unit) {
+        val listener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+            shizukuStatus = grantResult == PackageManager.PERMISSION_GRANTED
+        }
+        Shizuku.addRequestPermissionResultListener(listener)
+        onDispose { Shizuku.removeRequestPermissionResultListener(listener) }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        // 右上角齿轮
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Spacer(Modifier.height(4.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Default.Settings, "设置", tint = Color(0xFFBB86FC))
+                }
+            }
+        }
+
+        // 应用图标（11次进开发者）
         Box(
-            modifier = Modifier
-                .size(80.dp)
-                .clip(CircleShape)
-                .background(Color(0xFFBB86FC))
+            modifier = Modifier.size(80.dp).clip(CircleShape).background(Color(0xFFBB86FC))
                 .clickable {
                     devClickCount++
                     if (devClickCount >= 11) {
@@ -490,81 +511,66 @@ fun AboutPage(context: Context, onOpenDeveloperSettings: () -> Unit) {
                 },
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(40.dp), tint = Color.Black)
+            Icon(Icons.Default.Mic, null, modifier = Modifier.size(40.dp), tint = Color.Black)
         }
 
         Spacer(Modifier.height(8.dp))
-
-        // 应用名称 + 版本
         Text("MaidMic", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Text("v0.1.0-alpha", fontSize = 12.sp, color = Color(0xFF999999))
-
         Spacer(Modifier.height(4.dp))
+        Text("作者: 我是真的会谢", fontSize = 13.sp, color = Color(0xFF888888))
 
-        // 作者
-        Text(
-            "作者: 我是真的会谢",
-            fontSize = 13.sp,
-            color = Color(0xFFBBBBBB)
-        )
+        Spacer(Modifier.height(10.dp))
 
-        Spacer(Modifier.height(12.dp))
-
-        // 应用说明
-        Text(
-            "开源 Android 虚拟麦克风应用\n搭载自研 Echio 变声引擎",
-            fontSize = 13.sp,
-            color = Color(0xFF888888),
-            textAlign = TextAlign.Center,
-            lineHeight = 18.sp
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        // 社交链接（一行三个，紧凑）
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // Shizuku 授权状态
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (shizukuStatus) Color(0xFF1B5E20) else Color(0xFF1E1E1E)
+            ),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            // Bilibili
-            SocialIcon(
-                label = "B站",
-                emoji = "📺",
-                url = "https://b23.tv/JvcdN4I",
-                context = context
-            )
-            // 抖音
-            SocialIcon(
-                label = "抖音",
-                emoji = "🎵",
-                url = "https://v.douyin.com/cT8XUPBO",
-                context = context
-            )
-            // GitHub
-            SocialIcon(
-                label = "GitHub",
-                emoji = "💻",
-                url = "https://github.com/suer781",
-                context = context
-            )
+            Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(if (shizukuStatus) Icons.Default.CheckCircle else Icons.Default.Info, null,
+                    tint = if (shizukuStatus) Color.Green else Color(0xFF888888),
+                    modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    if (shizukuStatus) "Shizuku 已授权" else "Shizuku 未授权",
+                    fontSize = 12.sp, color = if (shizukuStatus) Color.Green else Color(0xFF888888)
+                )
+            }
         }
+
+        Spacer(Modifier.height(10.dp))
+
+        Text("开源 Android 虚拟麦克风\n搭载自研 Echio 变声引擎", fontSize = 13.sp, color = Color(0xFF666666), textAlign = TextAlign.Center, lineHeight = 18.sp)
+
+        Spacer(Modifier.height(14.dp))
+
+        // 社交链接
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            SocialIcon("B站", "📺", "https://b23.tv/JvcdN4I", context)
+            SocialIcon("抖音", "🎵", "https://v.douyin.com/cT8XUPBO", context)
+            SocialIcon("GitHub", "💻", "https://github.com/suer781", context)
+        }
+    }
+}
+
+private fun checkShizukuStatus(): Boolean {
+    return try {
+        Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+    } catch (_: Exception) {
+        false
     }
 }
 
 @Composable
 fun SocialIcon(label: String, emoji: String, url: String, context: Context) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable {
-                try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                } catch (_: Exception) {
-                    Toast.makeText(context, "无法打开链接", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .padding(12.dp)
+    Column(horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
+            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            catch (_: Exception) { Toast.makeText(context, "无法打开链接", Toast.LENGTH_SHORT).show() }
+        }.padding(12.dp)
     ) {
         Text(emoji, fontSize = 28.sp)
         Spacer(Modifier.height(4.dp))

@@ -195,12 +195,21 @@ fun DeveloperSettingsPage(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // 标题
-        Text(
-            text = if (isChinese) "⚙ 开发者选项" else "⚙ Developer Options",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold
-        )
+        // 标题 + 退出按钮
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.Close, contentDescription = if (isChinese) "关闭" else "Close")
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isChinese) "⚙ 开发者选项" else "⚙ Developer Options",
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
         
         Text(
             text = if (isChinese) "这些功能仅供高级用户使用。操作不当可能导致设备不稳定。" else "For advanced users only. Misuse may cause instability.",
