@@ -48,7 +48,7 @@ android {
     // NDK 编译
     externalNativeBuild {
         cmake {
-            path = file("../maidmic-engine/CMakeLists.txt")
+            path = file("../../maidmic-engine/CMakeLists.txt")
             version = "3.22.1"
         }
     }
