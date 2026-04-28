@@ -163,13 +163,12 @@ fun MaidMicMain(context: Context) {
             onRemoveModule = { id -> pipelineNodes = pipelineNodes.filter { it.nodeId != id } },
             onReorderModule = { _, _ -> },
             onToggleBypass = { id ->
-                pipelineNodes = pipelineNodes.map {
-                    if (it.nodeId == id) it.copy(bypass = !it.bypass) else it
-                }
-            },
-            onParamChange = { _, _, _ -> },
-            onBack = { showEditor = false }
-        )
+                        pipelineNodes = pipelineNodes.map {
+                            if (it.nodeId == id) it.copy(bypass = !it.bypass) else it
+                        }
+                    },
+                    onParamChange = { _, _, _ -> }
+                )
         return
     }
 
