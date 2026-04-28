@@ -43,7 +43,7 @@ void JNI_OnUnload(JavaVM* vm, void* reserved) {
 // ============================================================
 // 包名: aoeck.dwyai.com
 // 类名: MaidMicEngine (暂定，可在 Kotlin 端调整)
-// 
+//
 // 遵循命名约定:
 //   Java_aoeck_dwyai_com_MaidMicEngine_<method>
 
@@ -103,7 +103,7 @@ Java_aoeck_dwyai_com_MaidMicEngine_nativeProcessAudio(
     maidmic_buffer_t input;
     maidmic_buffer_t output;
 
-    input.data = (*env)->GetByteArrayElements(env, input_buffer, NULL);
+    input.data = env->GetByteArrayElements(input_buffer, NULL);
     input.data_bytes = (uint32_t)input_size;
     input.meta.sample_rate = 48000;
     input.meta.channels = 1;
@@ -113,7 +113,7 @@ Java_aoeck_dwyai_com_MaidMicEngine_nativeProcessAudio(
     input.meta.sequence = 0;
     input.owned = false;
 
-    output.data = (*env)->GetByteArrayElements(env, output_buffer, NULL);
+    output.data = env->GetByteArrayElements(output_buffer, NULL);
     output.data_bytes = (uint32_t)output_size;
     output.meta = input.meta;
     output.owned = false;
@@ -123,8 +123,8 @@ Java_aoeck_dwyai_com_MaidMicEngine_nativeProcessAudio(
         ? JNI_TRUE : JNI_FALSE;
 
     // 释放 JNI 引用
-    (*env)->ReleaseByteArrayElements(env, input_buffer, input.data, JNI_ABORT);
-    (*env)->ReleaseByteArrayElements(env, output_buffer, output.data, 0);
+    env->ReleaseByteArrayElements(input_buffer, (jbyte*)input.data, JNI_ABORT);
+    env->ReleaseByteArrayElements(output_buffer, (jbyte*)output.data, 0);
 
     return result;
 }

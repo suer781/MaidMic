@@ -40,10 +40,10 @@ typedef struct {
     uint32_t frame_capacity;            // 最大可存储帧数 = capacity - 1（留一个空位区分满/空）
     
     // --- 统计（用户可读） ---
-    atomic_uint_64_t frames_written;    // 总写入帧数
-    atomic_uint_64_t frames_read;       // 总读取帧数
-    atomic_uint_32_t underrun_count;    // 欠载次数（消费者追上了生产者）
-    atomic_uint_32_t overrun_count;     // 过载次数（生产者覆盖了未读数据）
+    atomic_uint_fast64_t frames_written;    // 总写入帧数
+    atomic_uint_fast64_t frames_read;       // 总读取帧数
+    atomic_uint_fast32_t underrun_count;    // 欠载次数（消费者追上了生产者）
+    atomic_uint_fast32_t overrun_count;     // 过载次数（生产者覆盖了未读数据）
     
     // --- 数据缓冲区 ---
     // 使用柔性数组成员，缓冲区紧跟在结构体后面，一次 malloc
