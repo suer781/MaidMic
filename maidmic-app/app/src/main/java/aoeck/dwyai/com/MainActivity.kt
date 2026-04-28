@@ -388,86 +388,13 @@ fun EqPage(context: Context) {
 
         Spacer(Modifier.height(12.dp))
 
-        // ===== 状态与授权 =====
-        var szState by remember { mutableStateOf(ShizukuStatus.state) }
-        LaunchedEffect(Unit) {
-            ShizukuStatus.refresh()
-            val l: (ShizukuState) -> Unit = { szState = it }
-            ShizukuStatus.addListener(l)
-        }
-
-        // Shizuku 状态卡片
-        Card(
+        //（授权和方案配置请到 关于 → 设置 中操作）
+        Text(
+            "授权和方案配置 → 关于页右上角设置",
+            fontSize = 11.sp, color = Color(0xFF555555),
             modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = when (szState) {
-                ShizukuState.READY -> Color(0xFF1B5E20)
-                ShizukuState.UNAUTHORIZED -> Color(0xFF4A3000)
-                ShizukuState.UNAVAILABLE -> Color(0xFF2A2A2A)
-            })
-        ) {
-            Row(
-                modifier = Modifier.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    when (szState) {
-                        ShizukuState.READY -> Icons.Default.CheckCircle
-                        else -> Icons.Default.Security
-                    },
-                    null,
-                    tint = when (szState) {
-                        ShizukuState.READY -> Color.Green
-                        ShizukuState.UNAUTHORIZED -> Color(0xFFFFA000)
-                        ShizukuState.UNAVAILABLE -> Color(0xFF888888)
-                    },
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        when (szState) {
-                            ShizukuState.READY -> "Shizuku 已授权"
-                            ShizukuState.UNAUTHORIZED -> "Shizuku 未授权"
-                            ShizukuState.UNAVAILABLE -> "Shizuku 未安装"
-                        },
-                        fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color.White
-                    )
-                }
-                if (szState == ShizukuState.UNAUTHORIZED) {
-                    TextButton(onClick = {
-                        ShizukuStatus.requestAuth { granted ->
-                            if (granted) Toast.makeText(context, "Shizuku 授权成功", Toast.LENGTH_SHORT).show()
-                            else Toast.makeText(context, "Shizuku 授权被拒绝", Toast.LENGTH_SHORT).show()
-                        }
-                    }) {
-                        Text("授权", color = Color(0xFFFFA000), fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // 三种方案（简洁卡片，可点击）
-        MicModeCard("方案A: Root AudioFlinger", "需 root", Icons.Default.Lock) {
-            Toast.makeText(context, "Root 模式待实现", Toast.LENGTH_SHORT).show()
-        }
-        Spacer(Modifier.height(4.dp))
-        MicModeCard("方案B: Shizuku AAudio", "推荐 · 非 root", Icons.Default.Security) {
-            when (szState) {
-                ShizukuState.READY -> Toast.makeText(context, "Shizuku 已就绪", Toast.LENGTH_SHORT).show()
-                ShizukuState.UNAUTHORIZED -> {
-                    ShizukuStatus.requestAuth { granted ->
-                        if (granted) Toast.makeText(context, "Shizuku 授权成功", Toast.LENGTH_SHORT).show()
-                    }
-                }
-                ShizukuState.UNAVAILABLE -> Toast.makeText(context, "请先安装 Shizuku", Toast.LENGTH_LONG).show()
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        MicModeCard("方案C: 无障碍服务", "最兼容", Icons.Default.Visibility) {
-            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
+            textAlign = TextAlign.Center
+        )
     }
 }
 
