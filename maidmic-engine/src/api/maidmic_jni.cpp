@@ -2,8 +2,7 @@
 // MaidMic JNI 桥 — Kotlin/Java ↔ C 引擎互操作
 // MaidMic JNI Bridge — Kotlin/Java ↔ C Engine Interop
 //
-// 通过 JNI 暴露引擎核心功能给 Android App (Kotlin/Java)。
-// 所有 JNI 函数遵循标准命名约定：
+// JNI 函数命名遵循标准约定：
 //   Java_<package>_<class>_<method>
 // 包名: aoeck.dwyai.com
 
@@ -38,95 +37,138 @@ void JNI_OnUnload(JavaVM* vm, void* reserved) {
 }
 
 // ============================================================
-// 管线 API JNI 包装
-// Pipeline API JNI Wrappers
+// 全局引擎实例管理
+// Global engine instance management
 // ============================================================
-// 包名: aoeck.dwyai.com
-// 类名: MaidMicEngine (暂定，可在 Kotlin 端调整)
-//
-// 遵循命名约定:
-//   Java_aoeck_dwyai_com_MaidMicEngine_<method>
+// 简化版本：只维护一个全局 pipeline 实例，
+// 各 bridge 共享。
+// Simple version: one global pipeline, shared across bridges.
 
-// 创建管线实例（返回 native handle 作为 long）
-// Create pipeline instance (returns native handle as long)
+static maidmic_pipeline_t* g_pipeline = NULL;
+
+// ============================================================
+// ShizukuMicBridge — native 方法
+// Package: aoeck.dwyai.com.bridge.shizuku
+// Class:   ShizukuMicBridge
+// ============================================================
+
 JNIEXPORT jlong JNICALL
-Java_aoeck_dwyai_com_MaidMicEngine_nativeCreatePipeline(
-    JNIEnv* env, jobject thiz) {
-    (void)env;
-    (void)thiz;
-    maidmic_pipeline_t* pipeline = maidmic_pipeline_create(MAIDMIC_PIPELINE_MODE_SIMPLE);
-    LOGI("Pipeline created: %p", (void*)pipeline);
-    return (jlong)(intptr_t)pipeline;
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeCreateEngine(
+    JNIEnv* env, jobject thiz,
+    jint sample_rate, jint channels, jint bit_depth, jint buffer_size) {
+    (void)env; (void)thiz; (void)sample_rate; (void)channels; (void)bit_depth; (void)buffer_size;
+
+    if (!g_pipeline) {
+        g_pipeline = maidmic_pipeline_create(MAIDMIC_PIPELINE_MODE_SIMPLE);
+        LOGI("Engine created: %p", (void*)g_pipeline);
+    }
+    return (jlong)(intptr_t)g_pipeline;
 }
 
-// 销毁管线实例
-// Destroy pipeline instance
 JNIEXPORT void JNICALL
-Java_aoeck_dwyai_com_MaidMicEngine_nativeDestroyPipeline(
-    JNIEnv* env, jobject thiz, jlong native_handle) {
-    (void)env;
-    (void)thiz;
-    maidmic_pipeline_t* pipeline = (maidmic_pipeline_t*)(intptr_t)native_handle;
-    if (pipeline) {
-        maidmic_pipeline_destroy(pipeline);
-        LOGI("Pipeline destroyed");
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeDestroyEngine(
+    JNIEnv* env, jobject thiz, jlong engine_ptr) {
+    (void)env; (void)thiz;
+    maidmic_pipeline_t* p = (maidmic_pipeline_t*)(intptr_t)engine_ptr;
+    if (p) {
+        maidmic_pipeline_destroy(p);
+        if (p == g_pipeline) g_pipeline = NULL;
+        LOGI("Engine destroyed");
     }
 }
 
-// 获取管线中模块数量
-// Get module count in pipeline
 JNIEXPORT jint JNICALL
-Java_aoeck_dwyai_com_MaidMicEngine_nativeGetModuleCount(
-    JNIEnv* env, jobject thiz, jlong native_handle) {
-    (void)env;
-    (void)thiz;
-    maidmic_pipeline_t* pipeline = (maidmic_pipeline_t*)(intptr_t)native_handle;
-    if (!pipeline) return 0;
-    return (jint)maidmic_pipeline_get_module_count(pipeline);
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeReadAudio(
+    JNIEnv* env, jobject thiz,
+    jlong engine_ptr, jbyteArray buffer, jint frame_count) {
+    (void)env; (void)thiz; (void)engine_ptr; (void)buffer; (void)frame_count;
+    // TODO: implement audio reading from RingBuffer
+    LOGI("nativeReadAudio called (stub)");
+    return 0;
 }
 
-// 处理一帧音频（走 JNI 缓冲区）
-// Process one audio frame (via JNI buffer)
-JNIEXPORT jboolean JNICALL
-Java_aoeck_dwyai_com_MaidMicEngine_nativeProcessAudio(
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeUpdateConfig(
     JNIEnv* env, jobject thiz,
-    jlong native_handle,
-    jbyteArray input_buffer,
-    jint input_size,
-    jbyteArray output_buffer,
-    jint output_size) {
-    (void)thiz;
-    maidmic_pipeline_t* pipeline = (maidmic_pipeline_t*)(intptr_t)native_handle;
-    if (!pipeline) return JNI_FALSE;
+    jlong engine_ptr,
+    jint sample_rate, jint channels, jint bit_depth, jint buffer_size) {
+    (void)env; (void)thiz; (void)engine_ptr;
+    LOGI("nativeUpdateConfig: %dHz %dch %dbit %dframes",
+         (int)sample_rate, (int)channels, (int)bit_depth, (int)buffer_size);
+}
 
-    // 准备 maidmic_buffer_t
-    maidmic_buffer_t input;
-    maidmic_buffer_t output;
+JNIEXPORT jfloat JNICALL
+Java_aoeck_dwyai_com_bridge_shizuku_ShizukuMicBridge_nativeGetLatencyMs(
+    JNIEnv* env, jobject thiz, jlong engine_ptr) {
+    (void)env; (void)thiz;
+    maidmic_pipeline_t* p = (maidmic_pipeline_t*)(intptr_t)engine_ptr;
+    return p ? (jfloat)maidmic_pipeline_get_latency_ms(p) : 0.0f;
+}
 
-    input.data = env->GetByteArrayElements(input_buffer, NULL);
-    input.data_bytes = (uint32_t)input_size;
-    input.meta.sample_rate = 48000;
-    input.meta.channels = 1;
-    input.meta.format = MAIDMIC_SAMPLE_S16;
-    input.meta.frame_count = (uint32_t)(input_size / sizeof(int16_t));
-    input.meta.timestamp_ns = 0;
-    input.meta.sequence = 0;
-    input.owned = false;
+// ============================================================
+// AccessibilityMicBridge — native 方法
+// Package: aoeck.dwyai.com.bridge.accessibility
+// Class:   AccessibilityMicBridge
+// ============================================================
 
-    output.data = env->GetByteArrayElements(output_buffer, NULL);
-    output.data_bytes = (uint32_t)output_size;
-    output.meta = input.meta;
-    output.owned = false;
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_bridge_accessibility_AccessibilityMicBridge_nativeProcess(
+    JNIEnv* env, jobject thiz,
+    jlong engine_ptr, jbyteArray input, jbyteArray output, jint size) {
+    (void)env; (void)thiz; (void)engine_ptr; (void)input; (void)output; (void)size;
+    LOGI("nativeProcess called (stub)");
+}
 
-    // 处理音频
-    jboolean result = maidmic_pipeline_process(pipeline, &input, &output)
-        ? JNI_TRUE : JNI_FALSE;
+// ============================================================
+// RootMicBridge — native 方法
+// Package: aoeck.dwyai.com.bridge.root
+// Class:   RootMicBridge
+// ============================================================
 
-    // 释放 JNI 引用
-    env->ReleaseByteArrayElements(input_buffer, (jbyte*)input.data, JNI_ABORT);
-    env->ReleaseByteArrayElements(output_buffer, (jbyte*)output.data, 0);
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_bridge_root_RootMicBridge_nativeProcess(
+    JNIEnv* env, jobject thiz,
+    jlong engine_ptr, jbyteArray input, jbyteArray output, jint size) {
+    (void)env; (void)thiz; (void)engine_ptr; (void)input; (void)output; (void)size;
+    LOGI("nativeProcess (root) called (stub)");
+}
 
-    return result;
+JNIEXPORT jint JNICALL
+Java_aoeck_dwyai_com_bridge_root_RootMicBridge_nativeWriteToVirtualDevice(
+    JNIEnv* env, jobject thiz,
+    jint fd, jbyteArray data, jint size) {
+    (void)env; (void)thiz; (void)fd; (void)data; (void)size;
+    LOGI("nativeWriteToVirtualDevice called (stub)");
+    return -1;
+}
+
+// ============================================================
+// LuaPluginSandbox — native 方法
+// Package: aoeck.dwyai.com.plugins.lua
+// Class:   LuaPluginSandbox
+// ============================================================
+
+JNIEXPORT jdouble JNICALL
+Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeGetEngineParam(
+    JNIEnv* env, jobject thiz, jstring key) {
+    (void)env; (void)thiz; (void)key;
+    LOGI("nativeGetEngineParam called (stub)");
+    return 0.0;
+}
+
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeSetEngineParam(
+    JNIEnv* env, jobject thiz, jstring key, jfloat value) {
+    (void)env; (void)thiz; (void)key; (void)value;
+    LOGI("nativeSetEngineParam called (stub)");
+}
+
+JNIEXPORT jstring JNICALL
+Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeLoadPreset(
+    JNIEnv* env, jobject thiz, jstring plugin_id, jstring preset_name) {
+    (void)env; (void)thiz; (void)plugin_id; (void)preset_name;
+    LOGI("nativeLoadPreset called (stub)");
+    return NULL;
 }
 
 #ifdef __cplusplus
