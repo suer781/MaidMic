@@ -347,7 +347,7 @@ fun EqPage(context: Context) {
     var reverb by remember { mutableFloatStateOf(prefs.getFloat("reverb", 0f)) }
     var pitch by remember { mutableIntStateOf(prefs.getInt("pitch", 0)) }
 
-    // 每次变化自动保存
+    // 每次变化自动保存并更新引擎
     fun save() {
         prefs.edit()
             .putInt("preset", selectedPreset)
@@ -357,6 +357,9 @@ fun EqPage(context: Context) {
             .putFloat("reverb", reverb)
             .putInt("pitch", pitch)
             .apply()
+        // 同步到引擎
+        NativeAudioProcessor.ensureLoaded()
+        NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch)
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
@@ -382,6 +385,43 @@ fun EqPage(context: Context) {
         EqSlider("混响", reverb, 0f..1f) { reverb = it; save() }
         Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
         Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt(); save() }, valueRange = -12f..12f, steps = 23)
+
+        Spacer(Modifier.height(12.dp))
+
+        // 启动/停止按钮
+        val isLoopbackRunning = remember { mutableStateOf(AudioLoopback.isActive()) }
+        Button(
+            onClick = {
+                if (isLoopbackRunning.value) {
+                    AudioLoopback.stop()
+                    isLoopbackRunning.value = false
+                    Toast.makeText(context, "音频处理已停止", Toast.LENGTH_SHORT).show()
+                } else {
+                    NativeAudioProcessor.ensureLoaded()
+                    NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch)
+                    AudioLoopback.start()
+                    isLoopbackRunning.value = true
+                    Toast.makeText(context, "音频处理已启动", Toast.LENGTH_SHORT).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (isLoopbackRunning.value) Color(0xFFB71C1C) else Color(0xFFBB86FC)
+            )
+        ) {
+            Icon(
+                if (isLoopbackRunning.value) Icons.Default.Stop else Icons.Default.PlayArrow,
+                null,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (isLoopbackRunning.value) "停止处理" else "开始处理",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color.Black
+            )
+        }
     }
 }
 
