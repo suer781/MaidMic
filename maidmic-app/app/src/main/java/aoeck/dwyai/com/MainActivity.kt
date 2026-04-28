@@ -388,96 +388,85 @@ fun EqPage(context: Context) {
 
         Spacer(Modifier.height(12.dp))
 
-        // ===== 音频控制器 =====
-        val isLoopbackRunning = remember { mutableStateOf(AudioLoopback.isRunning) }
-        var selectedBufferIdx by remember { mutableIntStateOf(
-            AudioLoopback.BUFFER_OPTIONS.indexOf(AudioLoopback.bufferFrames).coerceAtLeast(0)
-        ) }
-        var speakerOn by remember { mutableStateOf(AudioLoopback.useSpeaker) }
+        // ===== 状态与授权 =====
+        var szState by remember { mutableStateOf(ShizukuStatus.state) }
+        LaunchedEffect(Unit) {
+            ShizukuStatus.refresh()
+            val l: (ShizukuState) -> Unit = { szState = it }
+            ShizukuStatus.addListener(l)
+        }
 
-        // 启动/停止按钮
-        Button(
-            onClick = {
-                if (isLoopbackRunning.value) {
-                    AudioLoopback.stop(context)
-                    isLoopbackRunning.value = false
-                    Toast.makeText(context, "已停止", Toast.LENGTH_SHORT).show()
-                } else {
-                    AudioLoopback.setBufferFrames(AudioLoopback.BUFFER_OPTIONS[selectedBufferIdx])
-                    AudioLoopback.setUseSpeaker(speakerOn)
-                    NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch)
-                    AudioLoopback.start(context)
-                    isLoopbackRunning.value = true
-                    Toast.makeText(context, "音频处理已启动", Toast.LENGTH_SHORT).show()
-                }
-            },
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (isLoopbackRunning.value) Color(0xFFB71C1C) else Color(0xFFBB86FC)
-            )
+        // Shizuku 状态卡片
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = when (szState) {
+                ShizukuState.READY -> Color(0xFF1B5E20)
+                ShizukuState.UNAUTHORIZED -> Color(0xFF4A3000)
+                ShizukuState.UNAVAILABLE -> Color(0xFF2A2A2A)
+            })
         ) {
-            Icon(if (isLoopbackRunning.value) Icons.Default.Stop else Icons.Default.PlayArrow, null, Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(
-                if (isLoopbackRunning.value) "停止处理" else "开始处理",
-                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.Black
-            )
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    when (szState) {
+                        ShizukuState.READY -> Icons.Default.CheckCircle
+                        else -> Icons.Default.Security
+                    },
+                    null,
+                    tint = when (szState) {
+                        ShizukuState.READY -> Color.Green
+                        ShizukuState.UNAUTHORIZED -> Color(0xFFFFA000)
+                        ShizukuState.UNAVAILABLE -> Color(0xFF888888)
+                    },
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when (szState) {
+                            ShizukuState.READY -> "Shizuku 已授权"
+                            ShizukuState.UNAUTHORIZED -> "Shizuku 未授权"
+                            ShizukuState.UNAVAILABLE -> "Shizuku 未安装"
+                        },
+                        fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color.White
+                    )
+                }
+                if (szState == ShizukuState.UNAUTHORIZED) {
+                    TextButton(onClick = {
+                        ShizukuStatus.requestAuth { granted ->
+                            if (granted) Toast.makeText(context, "Shizuku 授权成功", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(context, "Shizuku 授权被拒绝", Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Text("授权", color = Color(0xFFFFA000), fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
 
         Spacer(Modifier.height(8.dp))
 
-        // Buffer 大小 + 延迟
-        if (!isLoopbackRunning.value) {
-            Text("缓冲大小（帧）", fontSize = 12.sp, color = Color(0xFF888888))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Slider(
-                    value = selectedBufferIdx.toFloat(),
-                    onValueChange = { selectedBufferIdx = it.toInt() },
-                    valueRange = 0f..(AudioLoopback.BUFFER_OPTIONS.size - 1).toFloat(),
-                    steps = AudioLoopback.BUFFER_OPTIONS.size - 2,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                val frames = AudioLoopback.BUFFER_OPTIONS[selectedBufferIdx]
-                val lat = (frames * 1000) / 48000
-                Text("${frames}帧\n${lat}ms", fontSize = 11.sp, color = Color(0xFFBB86FC), textAlign = TextAlign.Center)
+        // 三种方案（简洁卡片，可点击）
+        MicModeCard("方案A: Root AudioFlinger", "需 root", Icons.Default.Lock) {
+            Toast.makeText(context, "Root 模式待实现", Toast.LENGTH_SHORT).show()
+        }
+        Spacer(Modifier.height(4.dp))
+        MicModeCard("方案B: Shizuku AAudio", "推荐 · 非 root", Icons.Default.Security) {
+            when (szState) {
+                ShizukuState.READY -> Toast.makeText(context, "Shizuku 已就绪", Toast.LENGTH_SHORT).show()
+                ShizukuState.UNAUTHORIZED -> {
+                    ShizukuStatus.requestAuth { granted ->
+                        if (granted) Toast.makeText(context, "Shizuku 授权成功", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                ShizukuState.UNAVAILABLE -> Toast.makeText(context, "请先安装 Shizuku", Toast.LENGTH_LONG).show()
             }
-
-            // 扬声器/听筒切换
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("输出到", fontSize = 12.sp, color = Color(0xFF888888))
-                Spacer(Modifier.width(8.dp))
-                FilterChip(
-                    selected = !speakerOn,
-                    onClick = { speakerOn = false },
-                    label = { Text("听筒", fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFBB86FC), selectedLabelColor = Color.Black
-                    )
-                )
-                Spacer(Modifier.width(6.dp))
-                FilterChip(
-                    selected = speakerOn,
-                    onClick = { speakerOn = true },
-                    label = { Text("扬声器", fontSize = 11.sp) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = if (speakerOn) Color(0xFFB71C1C) else Color(0xFF333333),
-                        selectedLabelColor = if (speakerOn) Color.White else Color(0xFF888888)
-                    )
-                )
-            }
-
-            if (speakerOn) {
-                Spacer(Modifier.height(4.dp))
-                Text("⚠ 扬声器模式可能产生回声，建议使用耳机或听筒模式", fontSize = 10.sp, color = Color(0xFFFF9800))
-            }
-
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "实际延迟受设备音频管线影响（AEC、重采样等），理论最小值 ${(AudioLoopback.BUFFER_OPTIONS[selectedBufferIdx] * 1000) / 48000}ms",
-                fontSize = 10.sp, color = Color(0xFF666666)
-            )
+        }
+        Spacer(Modifier.height(4.dp))
+        MicModeCard("方案C: 无障碍服务", "最兼容", Icons.Default.Visibility) {
+            context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
     }
 }

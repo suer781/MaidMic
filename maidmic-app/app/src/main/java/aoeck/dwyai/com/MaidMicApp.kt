@@ -24,6 +24,9 @@ class MaidMicApp : Application() {
         
         Log.i(TAG, "MaidMic starting...")
         
+        // 初始化 Shizuku 状态
+        ShizukuStatus.refresh()
+        
         // 启动前台保活服务
         startKeepAliveService()
         
