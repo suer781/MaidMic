@@ -237,7 +237,7 @@ fun DashboardPage() {
                         }
                         "root" -> Toast.makeText(context, "Root 模式需要 ROOT 权限", Toast.LENGTH_LONG).show()
                         "accessibility" -> {
-                            val intent = android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             context.startActivity(intent)
                         }
                     }
