@@ -20,8 +20,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import aoeck.dwyai.com.ui.editor.ModuleChainEditor
 import aoeck.dwyai.com.ui.editor.PipelineNode
@@ -107,7 +111,7 @@ fun MaidMicTheme(content: @Composable () -> Unit) {
 @Composable
 fun MaidMicMain() {
     // 当前选中的导航项
-    var currentNav by remember { mutableStateOf(NavItem.Dashboard) }
+    var currentNav: NavItem by remember { mutableStateOf(NavItem.Dashboard) }
     
     // 管线中的模块列表（UI 状态）
     var pipelineNodes by remember { mutableStateOf(listOf<PipelineNode>()) }
@@ -150,7 +154,7 @@ fun MaidMicMain() {
                         selected = currentNav == item,
                         onClick = { currentNav = item },
                         icon = { Icon(item.icon, contentDescription = item.label) },
-                        label = { Text(item.label, fontSize = androidx.compose.ui.unit.sp(11)) }
+                        label = { Text(item.label, fontSize = sp(11)) }
                     )
                 }
             }
@@ -232,7 +236,7 @@ fun DashboardPage() {
                         Text(
                             badge,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                            fontSize = androidx.compose.ui.unit.sp(12)
+                            fontSize = sp(12)
                         )
                     }
                 }
@@ -274,14 +278,14 @@ fun SettingsPage(onOpenDeveloperSettings: () -> Unit) {
         ) {
             Row(
                 modifier = Modifier.padding(16.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(Icons.Default.DeveloperMode, contentDescription = null)
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
-                    Text("开发者选项", fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                    Text("开发者选项", fontWeight = FontWeight.Medium)
                     Text("版本 0.1.0-alpha（点击 7 次进入）", 
-                         fontSize = androidx.compose.ui.unit.sp(12),
+                         fontSize = sp(12),
                          color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -291,7 +295,7 @@ fun SettingsPage(onOpenDeveloperSettings: () -> Unit) {
         
         Text(
             "更多设置项即将推出",
-            fontSize = androidx.compose.ui.unit.sp(12),
+            fontSize = sp(12),
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
