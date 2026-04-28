@@ -15,6 +15,8 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import android.widget.Toast
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -27,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import rikka.shizuku.Shizuku
 import aoeck.dwyai.com.ui.editor.ModuleChainEditor
 import aoeck.dwyai.com.ui.editor.PipelineNode
 import aoeck.dwyai.com.ui.plugins.PluginMarketPage
@@ -196,6 +199,7 @@ fun MaidMicMain() {
 
 @Composable
 fun DashboardPage() {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -214,12 +218,30 @@ fun DashboardPage() {
         
         // 三路虚拟麦克风状态卡片
         // Three virtual mic status cards
-        listOf(
-            "方案A: Root AudioFlinger" to "需 root",
-            "方案B: Shizuku AAudio" to "推荐",
-            "方案C: 无障碍服务" to "最兼容"
-        ).forEach { (name, badge) ->
+        val micMethods = listOf(
+            Triple("方案A: Root AudioFlinger", "需 root", "root"),
+            Triple("方案B: Shizuku AAudio", "推荐", "shizuku"),
+            Triple("方案C: 无障碍服务", "最兼容", "accessibility")
+        )
+        micMethods.forEach { (name, badge, mode) ->
             Card(
+                onClick = {
+                    when (mode) {
+                        "shizuku" -> {
+                            try {
+                                Shizuku.requestPermission(0)
+                                Toast.makeText(context, "请求 Shizuku 权限...", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "Shizuku 未安装", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                        "root" -> Toast.makeText(context, "Root 模式需要 ROOT 权限", Toast.LENGTH_LONG).show()
+                        "accessibility" -> {
+                            val intent = android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
+                            context.startActivity(intent)
+                        }
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp)
