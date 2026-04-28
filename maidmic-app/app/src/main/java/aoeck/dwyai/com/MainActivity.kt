@@ -427,7 +427,7 @@ fun EqPage(context: Context) {
 
 @Composable
 fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
-    Text(label, fontSize = 13.sp, color = Color(0xFFBBBBBB))
+    Text("${label}: ${"%.1f".format(value)}", fontSize = 13.sp, color = Color(0xFFBBBBBB))
     Slider(value = value, onValueChange = onChange, valueRange = range, steps = 19)
     Spacer(Modifier.height(6.dp))
 }
