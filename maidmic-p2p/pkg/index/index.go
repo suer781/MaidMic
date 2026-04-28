@@ -5,12 +5,11 @@
 // 每个插件在索引中有一条记录，包含：
 //   - 插件名、描述、作者
 //   - 版本号、文件大小
-//   - 磁力链 (magnet link) 用于 P2P 下载
 //   - 权限等级
 //   - 源代码 GitHub 链接
 //
 // 客户端定期拉取 index.json，对比本地已安装版本，提示更新。
-// 下载时优先走 P2P，P2P 找不到节点时回退到 GitHub Releases 直连下载。
+// 下载走 GitHub Releases 直连下载。
 
 package index
 
@@ -48,7 +47,6 @@ type PluginEntry struct {
 	UpdatedAt   string `json:"updated_at"`  // 最后更新日期
 
 	// 下载信息
-	MagnetLink  string `json:"magnet_link"`  // 磁力链（用于 P2P 下载）
 	FileSize    int64  `json:"file_size"`    // 文件大小（字节）
 	FileHash    string `json:"file_hash"`    // SHA256 哈希（验证完整性）
 
@@ -253,28 +251,6 @@ func (is *IndexSync) ListAll() []PluginEntry {
 	})
 
 	return plugins
-}
-
-// ============================================================
-// 磁力链生成
-// Magnet link generation
-// ============================================================
-
-// BuildMagnetLink 从插件信息生成磁力链
-// Generate a magnet link from plugin info
-func BuildMagnetLink(plugin *PluginEntry) string {
-	// 磁力链格式: magnet:?xt=urn:btih:<INFOHASH>&dn=<NAME>&tr=<TRACKER>
-	// Magnet link format
-
-	params := []string{
-		fmt.Sprintf("xt=urn:btih:%s", plugin.FileHash),
-		fmt.Sprintf("dn=%s", plugin.Name),
-		"tr=udp://tracker.bittorrent.com:6881",
-		"tr=udp://tracker.opentrackr.org:1337",
-		"tr=udp://tracker.coppersurfer.tk:6969",
-	}
-
-	return "magnet:?" + strings.Join(params, "&")
 }
 
 // ============================================================
