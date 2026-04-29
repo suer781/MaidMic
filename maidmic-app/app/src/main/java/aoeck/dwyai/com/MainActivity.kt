@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
@@ -372,6 +373,8 @@ fun MicModeCard(title: String, desc: String, icon: ImageVector, onClick: () -> U
             }
             Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF666666), modifier = Modifier.size(20.dp))
         }
+    }
+}
 // ============================================================
 // EQ 调节页面 — HXAudio 风格
 // ============================================================
@@ -395,13 +398,13 @@ private val eqPresets = listOf(
 )
 
 // 频段标签（用于曲线图 X 轴）
-private val bandLabels = listOf("31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
+val bandLabels = listOf("31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
 
 // ============================================================
 // 设备检测
 // ============================================================
 
-private fun detectAudioDevice(context: Context): String {
+fun detectAudioDevice(context: Context): String {
     val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return "手机扬声器"
     return when {
         am.isWiredHeadsetOn -> "🎧 有线耳机"
