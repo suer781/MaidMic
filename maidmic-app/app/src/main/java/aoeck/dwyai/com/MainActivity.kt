@@ -42,7 +42,6 @@ import androidx.core.content.ContextCompat
 import rikka.shizuku.Shizuku
 import aoeck.dwyai.com.ui.editor.ModuleChainEditor
 import aoeck.dwyai.com.ui.editor.PipelineNode
-import aoeck.dwyai.com.ui.plugins.PluginMarketPage
 import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
 
 // ============================================================
@@ -52,7 +51,6 @@ import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
 sealed class NavItem(val label: String, val icon: ImageVector) {
     object Basic : NavItem("基础", Icons.Default.Home)
     object Editor : NavItem("模块链", Icons.Default.Tune)
-    object Market : NavItem("插件市场", Icons.Default.Store)
     object About : NavItem("关于", Icons.Default.Info)
 }
 
@@ -113,6 +111,11 @@ fun MaidMicMain(context: Context) {
         prefs.edit().putBoolean(KEY_UGC_ENABLED, isUgcEnabled).apply()
     }
 
+    // 启动时恢复引擎设置
+    LaunchedEffect(Unit) {
+        NativeAudioProcessor.loadEngine(prefs)
+    }
+
     if (showOnboarding) {
         OnboardingPage(
             context = context,
@@ -149,6 +152,10 @@ fun MaidMicMain(context: Context) {
                 showDeveloperSettings = true
                 prefs.edit().putBoolean(KEY_DEV_MODE, true).apply()
                 devModeEnabled = true
+            },
+            onEngineChanged = { engine ->
+                NativeAudioProcessor.setEngine(engine)
+                NativeAudioProcessor.saveEngine(prefs)
             }
         )
         return
@@ -179,7 +186,6 @@ fun MaidMicMain(context: Context) {
                     add(NavItem.Basic)
                     if (devModeEnabled) {
                         add(NavItem.Editor)
-                        add(NavItem.Market)
                     }
                     add(NavItem.About)
                 }
@@ -209,11 +215,6 @@ fun MaidMicMain(context: Context) {
                         }
                     },
                     onParamChange = { _, _, _ -> }
-                )
-                NavItem.Market -> PluginMarketPage(
-                    isUgcEnabled = isUgcEnabled,
-                    onInstall = { },
-                    onOpenDeveloperSettings = { showDeveloperSettings = true }
                 )
                 NavItem.About -> AboutPage(
                     context = context,
@@ -416,8 +417,15 @@ fun SettingsPage(
     showEditor: Boolean,
     onShowEditor: (Boolean) -> Unit,
     onBack: () -> Unit,
-    onOpenDeveloperSettings: () -> Unit = {}
+    onOpenDeveloperSettings: () -> Unit = {},
+    onEngineChanged: (AudioEngine) -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
+
+    // 当前引擎
+    var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
+
     Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
         // 顶栏
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -432,7 +440,6 @@ fun SettingsPage(
         Text("音频方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
 
-        val context = LocalContext.current
         SettingsCard(icon = Icons.Default.Lock, title = "Root AudioFlinger", desc = "需要 ROOT 权限") {
             Toast.makeText(context, "Root 模式待实现", Toast.LENGTH_SHORT).show()
         }
@@ -445,6 +452,35 @@ fun SettingsPage(
         SettingsCard(icon = Icons.Default.Visibility, title = "无障碍服务", desc = "最兼容") {
             context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+
+        Spacer(Modifier.height(20.dp))
+
+        // 引擎选择
+        Text("音频引擎", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AudioEngine.entries.forEach { engine ->
+                FilterChip(
+                    selected = currentEngine == engine,
+                    onClick = {
+                        currentEngine = engine
+                        onEngineChanged(engine)
+                    },
+                    label = { Text(engine.displayName, fontSize = 12.sp) },
+                    modifier = Modifier.weight(1f),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFFBB86FC),
+                        selectedLabelColor = Color.Black
+                    )
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            currentEngine.description,
+            fontSize = 11.sp,
+            color = Color(0xFF666666)
+        )
 
         Spacer(Modifier.height(20.dp))
 
