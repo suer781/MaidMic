@@ -30,7 +30,7 @@ class RootMicService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (bridge.checkRoot()) {
+        if (bridge.checkRoot().granted) {
             bridge.start()
         }
         return START_STICKY
