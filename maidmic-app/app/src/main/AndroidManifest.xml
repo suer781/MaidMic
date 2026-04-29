@@ -79,8 +79,9 @@
         </activity>
 
         <!-- ============================================================
-             方案 A: Root AudioFlinger 服务
-             通过 root shell 修改 audio_policy_configuration.xml
+             方案 A: Root (Magisk) 虚拟麦克风
+             AudioRecord + Engine 处理 + AudioTrack 环回输出
+             利用 root 权限提升进程优先级 (SCHED_FIFO)
              ============================================================ -->
         <service
             android:name=".bridge.root.RootMicService"
