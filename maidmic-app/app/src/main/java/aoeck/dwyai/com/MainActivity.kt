@@ -350,6 +350,7 @@ private val eqPresets = listOf(
 @Composable
 fun EqPage(context: Context) {
     val prefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+    val appPrefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
 
     var selectedPreset by remember { mutableIntStateOf(prefs.getInt("preset", 0)) }
     var gain by remember { mutableFloatStateOf(prefs.getFloat("gain", 0f)) }
@@ -357,6 +358,11 @@ fun EqPage(context: Context) {
     var treble by remember { mutableFloatStateOf(prefs.getFloat("treble", 0f)) }
     var reverb by remember { mutableFloatStateOf(prefs.getFloat("reverb", 0f)) }
     var pitch by remember { mutableIntStateOf(prefs.getInt("pitch", 0)) }
+
+    // 引擎选择（同步到 app prefs）
+    var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
+    // 曲线预设选择
+    var currentCurveIdx by remember { mutableIntStateOf(NativeAudioProcessor.currentCurvePreset) }
 
     // 每次变化自动保存并更新引擎
     fun save() {
@@ -368,38 +374,143 @@ fun EqPage(context: Context) {
             .putFloat("reverb", reverb)
             .putInt("pitch", pitch)
             .apply()
-        // 同步到引擎
         NativeAudioProcessor.ensureLoaded()
         NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch)
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
-        Text("MaidMic", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text("虚拟麦克风 · Echio 引擎", fontSize = 12.sp, color = Color(0xFF999999))
-        Spacer(Modifier.height(16.dp))
+    fun applyEngine(engine: AudioEngine) {
+        currentEngine = engine
+        NativeAudioProcessor.setEngine(engine)
+        NativeAudioProcessor.saveEngine(appPrefs)
+    }
 
-        Text("预设", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-        Spacer(Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            eqPresets.forEachIndexed { i, preset ->
-                FilterChip(selected = i == selectedPreset, onClick = {
-                    selectedPreset = i; gain = preset.gain; bass = preset.bass; treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch; save()
-                }, label = { Text(preset.name, fontSize = 12.sp) },
-                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFBB86FC), selectedLabelColor = Color.Black))
+    fun applyCurve(index: Int) {
+        currentCurveIdx = index
+        NativeAudioProcessor.setCurvePreset(index)
+        appPrefs.edit().putInt("curve_preset", index).apply()
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+        // 标题
+        Text("MaidMic", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(currentEngine.displayName, fontSize = 12.sp, color = Color(0xFFBB86FC))
+            Spacer(Modifier.width(6.dp))
+            Text(currentEngine.description, fontSize = 11.sp, color = Color(0xFF666666))
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // 引擎选择器（紧凑横条）
+        Text("音频引擎", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(6.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            AudioEngine.entries.forEach { engine ->
+                FilterChip(
+                    selected = currentEngine == engine,
+                    onClick = { applyEngine(engine) },
+                    label = { Text(engine.displayName, fontSize = 11.sp) },
+                    modifier = Modifier.weight(1f),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFFBB86FC),
+                        selectedLabelColor = Color.Black
+                    )
+                )
             }
         }
 
-        Spacer(Modifier.height(20.dp))
-        EqSlider("音量增益", gain, -10f..10f) { gain = it; save() }
-        EqSlider("低音", bass, -10f..10f) { bass = it; save() }
-        EqSlider("高音", treble, -10f..10f) { treble = it; save() }
-        EqSlider("混响", reverb, 0f..1f) { reverb = it; save() }
-        Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-        Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt(); save() }, valueRange = -12f..12f, steps = 23)
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // 根据引擎模式显示不同控件
+        // ============================================================
+        when (currentEngine) {
+            AudioEngine.PASSTHROUGH -> {
+                // 直通模式：什么也不显示
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.Forward, null, modifier = Modifier.size(48.dp), tint = Color(0xFF444444))
+                        Spacer(Modifier.height(12.dp))
+                        Text("直通模式 — 音频不经处理直接透传", fontSize = 14.sp, color = Color(0xFF666666))
+                        Text("可在设置页切换其他引擎", fontSize = 12.sp, color = Color(0xFF444444))
+                    }
+                }
+            }
+
+            AudioEngine.ECHIO_EQ -> {
+                // Echio 均衡：现有的 EQ 控件
+                Text("预设", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+                Spacer(Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    eqPresets.forEachIndexed { i, preset ->
+                        FilterChip(selected = i == selectedPreset, onClick = {
+                            selectedPreset = i; gain = preset.gain; bass = preset.bass; treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch; save()
+                        }, label = { Text(preset.name, fontSize = 12.sp) },
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFBB86FC), selectedLabelColor = Color.Black))
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+                EqSlider("音量增益", gain, -10f..10f) { gain = it; save() }
+                EqSlider("低音", bass, -10f..10f) { bass = it; save() }
+                EqSlider("高音", treble, -10f..10f) { treble = it; save() }
+                EqSlider("混响", reverb, 0f..1f) { reverb = it; save() }
+                Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
+                Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt(); save() }, valueRange = -12f..12f, steps = 23)
+            }
+
+            AudioEngine.FREQ_CURVE -> {
+                // 频响曲线：曲线预设选择
+                Text("曲线预设", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+                Spacer(Modifier.height(8.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    CurvePresets.ALL.forEachIndexed { index, preset ->
+                        val isSel = index == currentCurveIdx
+                        Card(
+                            onClick = { applyCurve(index) },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isSel) Color(0xFF2A1A2E) else Color(0xFF1E1E1E)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (isSel) {
+                                    Icon(Icons.Default.CheckCircle, null, tint = Color(0xFFBB86FC), modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(preset.name, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                                        color = if (isSel) Color(0xFFBB86FC) else Color.White)
+                                    Text(preset.description, fontSize = 11.sp, color = Color(0xFF888888))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                // 曲线引擎也复用混响和变调
+                Text("附加效果", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+                Spacer(Modifier.height(6.dp))
+                EqSlider("混响", reverb, 0f..1f) { reverb = it
+                    NativeAudioProcessor.ensureLoaded()
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch)
+                    prefs.edit().putFloat("reverb", reverb).apply()
+                }
+                Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
+                Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt()
+                    NativeAudioProcessor.ensureLoaded()
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch)
+                    prefs.edit().putInt("pitch", pitch).apply()
+                }, valueRange = -12f..12f, steps = 23)
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
 
-        //（授权和方案配置请到 关于 → 设置 中操作）
+        // 底部提示
         Text(
             "授权和方案配置 → 关于页右上角设置",
             fontSize = 11.sp, color = Color(0xFF555555),
