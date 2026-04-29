@@ -36,12 +36,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import rikka.shizuku.Shizuku
 import aoeck.dwyai.com.ui.editor.ModuleChainEditor
 import aoeck.dwyai.com.ui.editor.PipelineNode
+import aoeck.dwyai.com.ui.CreditsPage
 import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
 
 // ============================================================
@@ -105,6 +107,7 @@ fun MaidMicMain(context: Context) {
     var devModeEnabled by remember { mutableStateOf(prefs.getBoolean(KEY_DEV_MODE, false)) }
     var showSettings by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
+    var showCredits by remember { mutableStateOf(false) }
 
     // 保存 UGC 状态
     LaunchedEffect(isUgcEnabled) {
@@ -179,6 +182,12 @@ fun MaidMicMain(context: Context) {
         return
     }
 
+    // 开源鸣谢页面
+    if (showCredits) {
+        CreditsPage(onBack = { showCredits = false })
+        return
+    }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -223,7 +232,8 @@ fun MaidMicMain(context: Context) {
                         prefs.edit().putBoolean(KEY_DEV_MODE, true).apply()
                         devModeEnabled = true
                     },
-                    onOpenSettings = { showSettings = true }
+                    onOpenSettings = { showSettings = true },
+                    onOpenCredits = { showCredits = true }
                 )
             }
         }
@@ -482,6 +492,60 @@ fun SettingsPage(
             color = Color(0xFF666666)
         )
 
+        // 频响曲线预设选择（仅 FREQ_CURVE 引擎时显示）
+        if (currentEngine == AudioEngine.FREQ_CURVE) {
+            Spacer(Modifier.height(12.dp))
+            Text("曲线预设", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+            Spacer(Modifier.height(6.dp))
+            // 预设卡片列表
+            val presets = CurvePresets.ALL
+            presets.forEachIndexed { index, preset ->
+                Card(
+                    onClick = {
+                        NativeAudioProcessor.setCurvePreset(index)
+                        // 同步保存
+                        prefs.edit().putInt("curve_preset", index).apply()
+                    },
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (index == NativeAudioProcessor.currentCurvePreset)
+                            Color(0xFF2A1A2E) else Color(0xFF1E1E1E)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 选中指示器
+                        if (index == NativeAudioProcessor.currentCurvePreset) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                null,
+                                tint = Color(0xFFBB86FC),
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                preset.name,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (index == NativeAudioProcessor.currentCurvePreset) Color(0xFFBB86FC) else Color.White
+                            )
+                            Text(
+                                preset.description,
+                                fontSize = 11.sp,
+                                color = Color(0xFF888888)
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF555555), modifier = Modifier.size(16.dp))
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+
         Spacer(Modifier.height(20.dp))
 
         // 模块链编辑器（仅在 UGC 插件开启时显示）
@@ -536,7 +600,12 @@ fun SettingsCard(icon: ImageVector, title: String, desc: String, onClick: () -> 
 // ============================================================
 
 @Composable
-fun AboutPage(context: Context, onOpenDeveloperSettings: () -> Unit, onOpenSettings: () -> Unit) {
+fun AboutPage(
+    context: Context,
+    onOpenDeveloperSettings: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenCredits: () -> Unit = {}
+) {
     var devClickCount by remember { mutableIntStateOf(0) }
     var shizukuStatus by remember { mutableStateOf(checkShizukuStatus()) }
 
@@ -615,6 +684,17 @@ fun AboutPage(context: Context, onOpenDeveloperSettings: () -> Unit, onOpenSetti
             SocialIcon("抖音", "🎵", "https://v.douyin.com/cT8XUPBO", context)
             SocialIcon("GitHub", "💻", "https://github.com/suer781", context)
         }
+
+        Spacer(Modifier.height(20.dp))
+
+        // 开源鸣谢
+        Text(
+            text = "开源鸣谢",
+            fontSize = 12.sp,
+            color = Color(0xFFBB86FC),
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier.clickable { onOpenCredits() }
+        )
     }
 }
 
