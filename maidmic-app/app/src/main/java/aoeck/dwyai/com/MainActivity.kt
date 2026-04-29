@@ -30,6 +30,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -41,6 +43,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -815,17 +818,13 @@ private fun EqCurveGraph(
             }
         }
 
-        // X 轴标签
+        // X 轴标签 — 跳过，用底部频率文字替代
+        // 用 drawLine 标记频段位置
         labels.forEachIndexed { i, label ->
             val x = padL + graphW * i.toFloat() / (bandCount - 1).toFloat()
-            drawContext.canvas.nativeCanvas.drawText(
-                label, x, h - 4f,
-                android.graphics.Paint().apply {
-                    color = 0xFF666666.toInt()
-                    textSize = 22f
-                    textAlign = android.graphics.Paint.Align.CENTER
-                }
-            )
+            if (i % 2 == 0) { // 只画偶数索引的刻度
+                drawLine(Color(0xFF444444), Offset(x, h - padB), Offset(x, h - padB + 4f), strokeWidth = 1f)
+            }
         }
     }
 }
