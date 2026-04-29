@@ -88,7 +88,7 @@ class ShizukuMicBridge(private val context: Context) {
     private var isRunning = false
     
     // Shizuku 权限回调
-    private val permissionRequestCallback = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
+    private val permissionRequestCallback = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
         if (grantResult == PackageManager.PERMISSION_GRANTED) {
             Log.i(TAG, "Shizuku permission granted")
             status = ShizukuStatus.READY
@@ -278,11 +278,9 @@ class ShizukuMicBridge(private val context: Context) {
         val frameBytes = audioConfig.channelCount * (audioConfig.bitDepth / 8)
         val bufferSizeBytes = audioConfig.bufferSizeFrames * frameBytes
         
-        // 输入缓冲区（原始 PCM）
-        val inputBuffer = ByteArray(bufferSizeBytes)
         // 输出缓冲区（处理后 PCM）
         val outputBuffer = ByteArray(bufferSizeBytes)
-        
+
         while (isRunning) {
             // 从 RingBuffer 读取处理后的音频
             // Read processed audio from RingBuffer (via JNI)

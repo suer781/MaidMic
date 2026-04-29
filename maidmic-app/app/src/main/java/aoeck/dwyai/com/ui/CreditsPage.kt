@@ -10,9 +10,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -118,7 +117,7 @@ fun CreditsPage(onBack: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, "返回")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
             }
             Spacer(Modifier.width(8.dp))
             Text("开源鸣谢", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -180,8 +179,8 @@ fun CreditsPage(onBack: () -> Unit) {
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                 }
                                 Spacer(Modifier.width(8.dp))
-                                Icon(Icons.Default.OpenInNew, contentDescription = "打开链接",
-                                    tint = Color(0xFFBB86FC), modifier = Modifier.size(18.dp).clickable {
+                                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "打开链接",
+                                    tint = Color(0xFFCE93D8), modifier = Modifier.size(18.dp).clickable {
                                         try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.url))) }
                                         catch (_: Exception) { Toast.makeText(context, "无法打开链接", Toast.LENGTH_SHORT).show() }
                                     })

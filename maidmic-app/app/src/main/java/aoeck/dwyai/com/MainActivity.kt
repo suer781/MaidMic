@@ -24,7 +24,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -73,18 +76,36 @@ class MainActivity : ComponentActivity() {
 }
 
 // ============================================================
-// 主题
+// 主题 — 深色音频工作室风格
 // ============================================================
+
+private val MaidMicDarkColors = darkColorScheme(
+    primary = Color(0xFFCE93D8),         // 柔和紫罗兰
+    onPrimary = Color(0xFF1A0D2E),
+    primaryContainer = Color(0xFF4A2561),
+    onPrimaryContainer = Color(0xFFF3E5F5),
+    secondary = Color(0xFF80CBC4),       // 柔和青色
+    onSecondary = Color(0xFF00201E),
+    secondaryContainer = Color(0xFF004D47),
+    onSecondaryContainer = Color(0xFFA7F3EC),
+    tertiary = Color(0xFFFFAB91),        // 暖橙（用于强调）
+    onTertiary = Color(0xFF2D1509),
+    background = Color(0xFF100F14),      // 更深背景
+    onBackground = Color(0xFFE6E1E5),
+    surface = Color(0xFF1C1B1F),         // 表面色
+    onSurface = Color(0xFFE6E1E5),
+    surfaceVariant = Color(0xFF2A2930),
+    onSurfaceVariant = Color(0xFFCAC4D0),
+    outline = Color(0xFF938F99),
+    outlineVariant = Color(0xFF49454F),
+    error = Color(0xFFF2B8B5),
+    onError = Color(0xFF601410),
+)
 
 @Composable
 fun MaidMicTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = darkColorScheme(
-            primary = Color(0xFFBB86FC),
-            secondary = Color(0xFF03DAC6),
-            background = Color(0xFF121212),
-            surface = Color(0xFF1E1E1E),
-        ),
+        colorScheme = MaidMicDarkColors,
         content = content
     )
 }
@@ -145,10 +166,6 @@ fun MaidMicMain(context: Context) {
     // 设置页面
     if (showSettings) {
         SettingsPage(
-            isUgcEnabled = isUgcEnabled,
-            onUgcToggle = { isUgcEnabled = it },
-            showEditor = showEditor,
-            onShowEditor = { showEditor = it },
             onBack = { showSettings = false },
             onOpenDeveloperSettings = {
                 showSettings = false
@@ -270,17 +287,17 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
-            Icon(Icons.Default.Mic, null, modifier = Modifier.size(72.dp), tint = Color(0xFFBB86FC))
+            Icon(Icons.Default.Mic, null, modifier = Modifier.size(72.dp), tint = Color(0xFFCE93D8))
             Spacer(Modifier.height(12.dp))
             Text("MaidMic", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Color.White)
             Text("虚拟麦克风 · Echio 引擎", fontSize = 13.sp, color = Color(0xFF999999))
             Spacer(Modifier.height(24.dp))
 
             // 权限状态
-            PermissionRow("录音权限", if (hasMic) "✓ 已授予" else "请求中...", if (hasMic) Color.Green else Color(0xFFBB86FC))
+            PermissionRow("录音权限", if (hasMic) "✓ 已授予" else "请求中...", if (hasMic) Color.Green else Color(0xFFCE93D8))
             if (Build.VERSION.SDK_INT >= 33) {
                 Spacer(Modifier.height(8.dp))
-                PermissionRow("通知权限", if (hasNotif) "✓ 已授予" else "请求中...", if (hasNotif) Color.Green else Color(0xFFBB86FC))
+                PermissionRow("通知权限", if (hasNotif) "✓ 已授予" else "请求中...", if (hasNotif) Color.Green else Color(0xFFCE93D8))
             }
 
             Spacer(Modifier.height(24.dp))
@@ -302,7 +319,7 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
             }
 
             Spacer(Modifier.height(24.dp))
-            Button(onClick = onDone, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFBB86FC))) {
+            Button(onClick = onDone, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFCE93D8))) {
                 Text("开始使用", color = Color.Black, fontWeight = FontWeight.Bold)
             }
         }
@@ -321,7 +338,7 @@ fun PermissionRow(label: String, value: String, valueColor: Color) {
 fun MicModeCard(title: String, desc: String, icon: ImageVector, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
         Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = Color(0xFFBB86FC), modifier = Modifier.size(24.dp))
+            Icon(icon, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
@@ -390,11 +407,16 @@ fun EqPage(context: Context) {
         appPrefs.edit().putInt("curve_preset", index).apply()
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
         // 标题
         Text("MaidMic", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(currentEngine.displayName, fontSize = 12.sp, color = Color(0xFFBB86FC))
+            Text(currentEngine.displayName, fontSize = 12.sp, color = Color(0xFFCE93D8))
             Spacer(Modifier.width(6.dp))
             Text(currentEngine.description, fontSize = 11.sp, color = Color(0xFF666666))
         }
@@ -411,7 +433,7 @@ fun EqPage(context: Context) {
                     label = { Text(engine.displayName, fontSize = 11.sp) },
                     modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFBB86FC),
+                        selectedContainerColor = Color(0xFFCE93D8),
                         selectedLabelColor = Color.Black
                     )
                 )
@@ -428,7 +450,7 @@ fun EqPage(context: Context) {
                 // 直通模式：什么也不显示
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.Forward, null, modifier = Modifier.size(48.dp), tint = Color(0xFF444444))
+                        Icon(Icons.AutoMirrored.Filled.Forward, null, modifier = Modifier.size(48.dp), tint = Color(0xFF444444))
                         Spacer(Modifier.height(12.dp))
                         Text("直通模式 — 音频不经处理直接透传", fontSize = 14.sp, color = Color(0xFF666666))
                         Text("可在设置页切换其他引擎", fontSize = 12.sp, color = Color(0xFF444444))
@@ -445,7 +467,7 @@ fun EqPage(context: Context) {
                         FilterChip(selected = i == selectedPreset, onClick = {
                             selectedPreset = i; gain = preset.gain; bass = preset.bass; treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch; save()
                         }, label = { Text(preset.name, fontSize = 12.sp) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFBB86FC), selectedLabelColor = Color.Black))
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
                     }
                 }
                 Spacer(Modifier.height(20.dp))
@@ -476,12 +498,12 @@ fun EqPage(context: Context) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 if (isSel) {
-                                    Icon(Icons.Default.CheckCircle, null, tint = Color(0xFFBB86FC), modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.CheckCircle, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(18.dp))
                                     Spacer(Modifier.width(8.dp))
                                 }
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(preset.name, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                                        color = if (isSel) Color(0xFFBB86FC) else Color.White)
+                                        color = if (isSel) Color(0xFFCE93D8) else Color.White)
                                     Text(preset.description, fontSize = 11.sp, color = Color(0xFF888888))
                                 }
                             }
@@ -533,24 +555,24 @@ fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>
 // 设置页面（权限、外观、模块链入口）
 @Composable
 fun SettingsPage(
-    isUgcEnabled: Boolean,
-    onUgcToggle: (Boolean) -> Unit,
-    showEditor: Boolean,
-    onShowEditor: (Boolean) -> Unit,
     onBack: () -> Unit,
     onOpenDeveloperSettings: () -> Unit = {},
     onEngineChanged: (AudioEngine) -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
-
     // 当前引擎
     var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
 
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(20.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
         // 顶栏
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
             Spacer(Modifier.width(8.dp))
             Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
@@ -590,7 +612,7 @@ fun SettingsPage(
                     label = { Text(engine.displayName, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFBB86FC),
+                        selectedContainerColor = Color(0xFFCE93D8),
                         selectedLabelColor = Color.Black
                     )
                 )
@@ -632,7 +654,7 @@ fun SettingsPage(
                             Icon(
                                 Icons.Default.CheckCircle,
                                 null,
-                                tint = Color(0xFFBB86FC),
+                                tint = Color(0xFFCE93D8),
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(Modifier.width(8.dp))
@@ -642,7 +664,7 @@ fun SettingsPage(
                                 preset.name,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = if (index == NativeAudioProcessor.currentCurvePreset) Color(0xFFBB86FC) else Color.White
+                                color = if (index == NativeAudioProcessor.currentCurvePreset) Color(0xFFCE93D8) else Color.White
                             )
                             Text(
                                 preset.description,
@@ -654,29 +676,6 @@ fun SettingsPage(
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        // 模块链编辑器（仅在 UGC 插件开启时显示）
-        if (isUgcEnabled) {
-            Text("编辑器", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-            Spacer(Modifier.height(8.dp))
-            Card(
-                onClick = { onShowEditor(true) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
-            ) {
-                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Tune, null, tint = Color(0xFFBB86FC))
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("模块链编辑器", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                        Text("编排 DSP 处理顺序", fontSize = 12.sp, color = Color(0xFF888888))
-                    }
-                    Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF666666))
-                }
             }
         }
 
@@ -695,7 +694,7 @@ fun SettingsPage(
 fun SettingsCard(icon: ImageVector, title: String, desc: String, onClick: () -> Unit) {
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))) {
         Row(modifier = Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, null, tint = Color(0xFFBB86FC), modifier = Modifier.size(22.dp))
+            Icon(icon, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(title, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
@@ -735,14 +734,14 @@ fun AboutPage(
             Spacer(Modifier.height(4.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 IconButton(onClick = onOpenSettings) {
-                    Icon(Icons.Default.Settings, "设置", tint = Color(0xFFBB86FC))
+                    Icon(Icons.Default.Settings, "设置", tint = Color(0xFFCE93D8))
                 }
             }
         }
 
         // 应用图标（11次进开发者）
         Box(
-            modifier = Modifier.size(80.dp).clip(CircleShape).background(Color(0xFFBB86FC))
+            modifier = Modifier.size(80.dp).clip(CircleShape).background(Color(0xFFCE93D8))
                 .clickable {
                     devClickCount++
                     if (devClickCount >= 11) {
@@ -802,7 +801,7 @@ fun AboutPage(
         Text(
             text = "开源鸣谢",
             fontSize = 12.sp,
-            color = Color(0xFFBB86FC),
+            color = Color(0xFFCE93D8),
             textDecoration = TextDecoration.Underline,
             modifier = Modifier.clickable { onOpenCredits() }
         )
@@ -827,6 +826,6 @@ fun SocialIcon(label: String, emoji: String, url: String, context: Context) {
     ) {
         Text(emoji, fontSize = 28.sp)
         Spacer(Modifier.height(4.dp))
-        Text(label, fontSize = 12.sp, color = Color(0xFFBB86FC))
+        Text(label, fontSize = 12.sp, color = Color(0xFFCE93D8))
     }
 }

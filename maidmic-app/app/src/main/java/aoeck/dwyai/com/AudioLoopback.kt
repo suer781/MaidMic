@@ -93,6 +93,7 @@ object AudioLoopback {
                 val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 savedAudioMode = am.mode
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
+                @Suppress("DEPRECATION")
                 am.isSpeakerphoneOn = false
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to set audio route: ${e.message}")
