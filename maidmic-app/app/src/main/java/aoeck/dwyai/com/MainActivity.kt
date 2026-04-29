@@ -22,8 +22,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -39,6 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -366,11 +372,8 @@ fun MicModeCard(title: String, desc: String, icon: ImageVector, onClick: () -> U
             }
             Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF666666), modifier = Modifier.size(20.dp))
         }
-    }
-}
-
 // ============================================================
-// EQ 调节页面（保持不变）
+// EQ 调节页面 — HXAudio 风格
 // ============================================================
 
 data class EqPreset(val name: String, val gain: Float, val bass: Float, val treble: Float,
@@ -385,12 +388,31 @@ private val eqPresets = listOf(
     EqPreset("萝莉", 4f, -2f, 4f, 0.1f, 6, -3f, 0f, 0f, 0f),
     EqPreset("大叔", 2f, 3f, -2f, 0.3f, -5, 4f, 0f, 0f, 0f),
     EqPreset("混响", -1f, 1f, 1f, 0.8f, 0, 0f, 0f, 0f, 0f),
-    // 新预设
     EqPreset("机器人", 3f, 0f, 0f, 0.2f, 1, 0f, 0.5f, 0f, 0f),
     EqPreset("恶魔", 2f, 4f, -4f, 0.3f, -6, 5f, 0.4f, 80f, 0.3f),
     EqPreset("花栗鼠", 6f, -4f, 5f, 0f, 10, -4f, 0f, 0f, 0f),
     EqPreset("幽灵", 0f, -2f, 2f, 0.7f, 3, 0f, 0f, 200f, 0.5f),
 )
+
+// 频段标签（用于曲线图 X 轴）
+private val bandLabels = listOf("31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k")
+
+// ============================================================
+// 设备检测
+// ============================================================
+
+private fun detectAudioDevice(context: Context): String {
+    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return "手机扬声器"
+    return when {
+        am.isWiredHeadsetOn -> "🎧 有线耳机"
+        am.isBluetoothA2dpOn || am.isBluetoothScoOn -> "🔵 蓝牙设备"
+        else -> "🔊 手机扬声器"
+    }
+}
+
+// ============================================================
+// 主 EQ 页面（HXAudio 风格）
+// ============================================================
 
 @Composable
 fun EqPage(context: Context) {
@@ -408,26 +430,25 @@ fun EqPage(context: Context) {
     var echoDelay by remember { mutableFloatStateOf(prefs.getFloat("echo_delay", 0f)) }
     var echoDecay by remember { mutableFloatStateOf(prefs.getFloat("echo_decay", 0f)) }
 
-    // 引擎选择（同步到 app prefs）
     var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
-    // 曲线预设选择
     var currentCurveIdx by remember { mutableIntStateOf(NativeAudioProcessor.currentCurvePreset) }
+    var bypass by remember { mutableStateOf(false) }
+    var testState by remember { mutableStateOf(TestState.IDLE) }
+    var testProgress by remember { mutableIntStateOf(0) }
 
-    // 每次变化自动保存并更新引擎
+    // 设备检测
+    val deviceLabel = remember { mutableStateOf(detectAudioDevice(context)) }
+
     fun save() {
         prefs.edit()
-            .putInt("preset", selectedPreset)
-            .putFloat("gain", gain)
-            .putFloat("bass", bass)
-            .putFloat("treble", treble)
-            .putFloat("reverb", reverb)
-            .putInt("pitch", pitch)
-            .putFloat("formant", formant)
-            .putFloat("distortion", distortion)
-            .putFloat("echo_delay", echoDelay)
-            .putFloat("echo_decay", echoDecay)
+            .putInt("preset", selectedPreset).putFloat("gain", gain)
+            .putFloat("bass", bass).putFloat("treble", treble)
+            .putFloat("reverb", reverb).putInt("pitch", pitch)
+            .putFloat("formant", formant).putFloat("distortion", distortion)
+            .putFloat("echo_delay", echoDelay).putFloat("echo_decay", echoDecay)
             .apply()
         NativeAudioProcessor.ensureLoaded()
+        if (bypass) return
         NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch,
             formant, distortion, echoDelay, echoDecay)
     }
@@ -444,239 +465,380 @@ fun EqPage(context: Context) {
         appPrefs.edit().putInt("curve_preset", index).apply()
     }
 
+    // 频响曲线数据（用于 Canvas 绘图）
+    val curveValues = remember(bass, treble, gain) {
+        // 模拟 10 段频响曲线值，基于 bass/treble/gain 参数
+        val base = gain
+        listOf(
+            base + bass * 1.2f,   // 31Hz
+            base + bass * 1.0f,   // 62Hz
+            base + bass * 0.6f,   // 125Hz
+            base + bass * 0.2f,   // 250Hz
+            base,                   // 500Hz
+            base,                   // 1kHz
+            base + treble * 0.3f,  // 2kHz
+            base + treble * 0.6f,  // 4kHz
+            base + treble * 0.8f,  // 8kHz
+            base + treble * 1.0f,  // 16kHz
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp)
             .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
     ) {
-        // 标题
-        Text("MaidMic", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(currentEngine.displayName, fontSize = 12.sp, color = Color(0xFFCE93D8))
-            Spacer(Modifier.width(6.dp))
-            Text(currentEngine.description, fontSize = 11.sp, color = Color(0xFF666666))
-        }
-        Spacer(Modifier.height(12.dp))
-
-        // 引擎选择器（紧凑横条）
-        Text("音频引擎", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-        Spacer(Modifier.height(6.dp))
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            AudioEngine.entries.forEach { engine ->
-                FilterChip(
-                    selected = currentEngine == engine,
-                    onClick = { applyEngine(engine) },
-                    label = { Text(engine.displayName, fontSize = 11.sp) },
-                    modifier = Modifier.weight(1f),
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFCE93D8),
-                        selectedLabelColor = Color.Black
-                    )
+        // ============================================================
+        // 顶部：标题 + 引擎 + 旁路开关
+        // ============================================================
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("MaidMic", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(currentEngine.displayName, fontSize = 11.sp, color = Color(0xFFCE93D8))
+            }
+            // 旁路开关
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("旁路", fontSize = 11.sp, color = Color(0xFF888888))
+                Spacer(Modifier.width(4.dp))
+                Switch(
+                    checked = bypass,
+                    onCheckedChange = { b ->
+                        bypass = b
+                        if (b) {
+                            NativeAudioProcessor.setEngine(AudioEngine.PASSTHROUGH)
+                        } else {
+                            NativeAudioProcessor.setEngine(currentEngine)
+                        }
+                    },
+                    modifier = Modifier.height(24.dp),
+                    colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8))
                 )
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(6.dp))
 
         // ============================================================
-        // 根据引擎模式显示不同控件
+        // 设备检测栏
+        // ============================================================
+        Surface(
+            color = Color(0xFF2A2930),
+            shape = RoundedCornerShape(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Speaker, null, modifier = Modifier.size(14.dp), tint = Color(0xFF80CBC4))
+                Spacer(Modifier.width(6.dp))
+                Text(deviceLabel.value, fontSize = 11.sp, color = Color(0xFF80CBC4))
+                Spacer(Modifier.weight(1f))
+                // 引擎选择精简版
+                AudioEngine.entries.forEach { engine ->
+                    Text(
+                        if (currentEngine == engine) "● ${engine.displayName}" else "○ ${engine.displayName}",
+                        fontSize = 10.sp,
+                        color = if (currentEngine == engine) Color(0xFFCE93D8) else Color(0xFF555555),
+                        modifier = Modifier.clickable { applyEngine(engine) }.padding(horizontal = 4.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // ============================================================
+        // 频响曲线图 (Canvas)
+        // ============================================================
+        if (currentEngine != AudioEngine.FREQ_CURVE) {
+            EqCurveGraph(
+                values = curveValues,
+                labels = bandLabels,
+                modifier = Modifier.fillMaxWidth().height(140.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+
+        // ============================================================
+        // 主控件区 — 根据引擎模式
         // ============================================================
         when (currentEngine) {
             AudioEngine.PASSTHROUGH -> {
-                // 直通模式：什么也不显示
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.AutoMirrored.Filled.Forward, null, modifier = Modifier.size(48.dp), tint = Color(0xFF444444))
-                        Spacer(Modifier.height(12.dp))
-                        Text("直通模式 — 音频不经处理直接透传", fontSize = 14.sp, color = Color(0xFF666666))
-                        Text("可在设置页切换其他引擎", fontSize = 12.sp, color = Color(0xFF444444))
+                        Text("直通模式", fontSize = 16.sp, color = Color(0xFF666666))
+                        Text("音频不经处理直接透传", fontSize = 12.sp, color = Color(0xFF444444))
                     }
                 }
             }
 
             AudioEngine.ECHIO_EQ -> {
-                // Echio 均衡：现有的 EQ 控件
-                Text("预设", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-                Spacer(Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 预设滚动行
+                Text("预设", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFFAAAAAA))
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
                     eqPresets.forEachIndexed { i, preset ->
-                        FilterChip(selected = i == selectedPreset, onClick = {
-                            selectedPreset = i; gain = preset.gain; bass = preset.bass
-                            treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch
-                            formant = preset.formant; distortion = preset.distortion
-                            echoDelay = preset.echoDelay; echoDecay = preset.echoDecay
-                            save()
-                        }, label = { Text(preset.name, fontSize = 12.sp) },
-                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
-                    }
-                }
-                Spacer(Modifier.height(20.dp))
-                EqSlider("音量增益", gain, -10f..10f) { gain = it; save() }
-                EqSlider("低音", bass, -10f..10f) { bass = it; save() }
-                EqSlider("高音", treble, -10f..10f) { treble = it; save() }
-                EqSlider("混响", reverb, 0f..1f) { reverb = it; save() }
-                Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-                Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt(); save() }, valueRange = -12f..12f, steps = 23)
-
-                Spacer(Modifier.height(12.dp))
-                Text("效果器", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-                Spacer(Modifier.height(4.dp))
-                EqSlider("共振峰偏移", formant, -12f..12f) { formant = it; save() }
-                EqSlider("失真", distortion, 0f..1f) { distortion = it; save() }
-                EqSlider("回声延迟 (ms)", echoDelay, 0f..500f) { echoDelay = it; save() }
-                EqSlider("回声衰减", echoDecay, 0f..0.9f) { echoDecay = it; save() }
-            }
-
-            AudioEngine.FREQ_CURVE -> {
-                // 频响曲线：曲线预设选择
-                Text("曲线预设", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-                Spacer(Modifier.height(8.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    CurvePresets.ALL.forEachIndexed { index, preset ->
-                        val isSel = index == currentCurveIdx
-                        Card(
-                            onClick = { applyCurve(index) },
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isSel) Color(0xFF2A1A2E) else Color(0xFF1E1E1E)
-                            ),
-                            modifier = Modifier.fillMaxWidth()
+                        val isSel = i == selectedPreset
+                        Surface(
+                            onClick = {
+                                selectedPreset = i; gain = preset.gain; bass = preset.bass
+                                treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch
+                                formant = preset.formant; distortion = preset.distortion
+                                echoDelay = preset.echoDelay; echoDecay = preset.echoDecay
+                                save()
+                            },
+                            color = if (isSel) Color(0xFF4A2561) else Color(0xFF2A2930),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
                         ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (isSel) {
-                                    Icon(Icons.Default.CheckCircle, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(preset.name, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                                        color = if (isSel) Color(0xFFCE93D8) else Color.White)
-                                    Text(preset.description, fontSize = 11.sp, color = Color(0xFF888888))
-                                }
-                            }
+                            Text(
+                                preset.name,
+                                fontSize = 12.sp,
+                                color = if (isSel) Color(0xFFCE93D8) else Color(0xFFAAAAAA),
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
+                            )
                         }
                     }
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(14.dp))
 
-                // 曲线引擎也复用混响和变调
-                Text("附加效果", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+                // 快速滑块（紧凑）
+                EqSlider("增益", gain, -10f..10f) { gain = it; save() }
+                EqSlider("低音", bass, -10f..10f) { bass = it; save() }
+                EqSlider("高音", treble, -10f..10f) { treble = it; save() }
+
+                // 效果折叠区域
+                var showEffects by remember { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { showEffects = !showEffects },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("附加效果", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFFAAAAAA))
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        if (showEffects) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        null,
+                        modifier = Modifier.size(16.dp),
+                        tint = Color(0xFF666666)
+                    )
+                }
+                if (showEffects) {
+                    EqSlider("混响", reverb, 0f..1f) { reverb = it; save() }
+                    Text("变调: $pitch", fontSize = 11.sp, color = Color(0xFF888888))
+                    Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt(); save() },
+                        valueRange = -12f..12f, steps = 23,
+                        colors = SliderDefaults.colors(thumbColor = Color(0xFFCE93D8), activeTrackColor = Color(0xFFCE93D8)))
+                    EqSlider("共振峰", formant, -12f..12f) { formant = it; save() }
+                    EqSlider("失真", distortion, 0f..1f) { distortion = it; save() }
+                    EqSlider("回声(ms)", echoDelay, 0f..500f) { echoDelay = it; save() }
+                    EqSlider("回声衰减", echoDecay, 0f..0.9f) { echoDecay = it; save() }
+                }
+            }
+
+            AudioEngine.FREQ_CURVE -> {
+                Text("曲线预设", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFFAAAAAA))
                 Spacer(Modifier.height(6.dp))
-                EqSlider("混响", reverb, 0f..1f) { reverb = it
-                    NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
-                    prefs.edit().putFloat("reverb", reverb).apply()
-                }
-                Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-                Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt()
-                    NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
-                    prefs.edit().putInt("pitch", pitch).apply()
-                }, valueRange = -12f..12f, steps = 23)
-
-                Spacer(Modifier.height(12.dp))
-                Text("效果器", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-                Spacer(Modifier.height(4.dp))
-                EqSlider("共振峰偏移", formant, -12f..12f) { formant = it
-                    NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
-                    prefs.edit().putFloat("formant", formant).apply()
-                }
-                EqSlider("失真", distortion, 0f..1f) { distortion = it
-                    NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
-                    prefs.edit().putFloat("distortion", distortion).apply()
-                }
-                EqSlider("回声延迟 (ms)", echoDelay, 0f..500f) { echoDelay = it
-                    NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
-                    prefs.edit().putFloat("echo_delay", echoDelay).apply()
-                }
-                EqSlider("回声衰减", echoDecay, 0f..0.9f) { echoDecay = it
-                    NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
-                    prefs.edit().putFloat("echo_decay", echoDecay).apply()
+                CurvePresets.ALL.forEachIndexed { index, preset ->
+                    val isSel = index == currentCurveIdx
+                    Surface(
+                        onClick = { applyCurve(index) },
+                        color = if (isSel) Color(0xFF4A2561) else Color(0xFF2A2930),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (isSel) {
+                                Icon(Icons.Default.CheckCircle, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Column {
+                                Text(preset.name, fontSize = 13.sp,
+                                    color = if (isSel) Color(0xFFCE93D8) else Color.White)
+                                Text(preset.description, fontSize = 10.sp, color = Color(0xFF888888))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
                 }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(14.dp))
 
         // ============================================================
-        // 测试变声 — 录音 → 处理 → 回放
+        // 测试变声按钮
         // ============================================================
-        var testState by remember { mutableStateOf(TestState.IDLE) }
-        var testProgress by remember { mutableIntStateOf(0) }
-
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = when (testState) {
-                    TestState.IDLE -> Color(0xFF1E1E1E)
-                    TestState.RECORDING -> Color(0xFF2A1A1A)
-                    TestState.PLAYING -> Color(0xFF1A2A1A)
+        Surface(
+            onClick = {
+                if (testState == TestState.IDLE) {
+                    startVoiceTest(context, 3, { s -> testState = s }, { p -> testProgress = p })
                 }
-            ),
+            },
+            color = when (testState) {
+                TestState.IDLE -> Color(0xFF2A2930)
+                TestState.RECORDING -> Color(0xFF4A1A1A)
+                TestState.PLAYING -> Color(0xFF1A4A1A)
+            },
+            shape = RoundedCornerShape(10.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        when (testState) {
-                            TestState.IDLE -> Icons.Default.Mic
-                            TestState.RECORDING -> Icons.Default.FiberManualRecord
-                            TestState.PLAYING -> Icons.Default.PlayArrow
-                        },
-                        null,
-                        tint = when (testState) {
-                            TestState.IDLE -> Color(0xFFCE93D8)
-                            TestState.RECORDING -> Color.Red
-                            TestState.PLAYING -> Color(0xFF4CAF50)
-                        },
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(Modifier.width(8.dp))
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    when (testState) {
+                        TestState.IDLE -> Icons.Default.Mic
+                        TestState.RECORDING -> Icons.Default.FiberManualRecord
+                        TestState.PLAYING -> Icons.Default.PlayArrow
+                    },
+                    null,
+                    tint = when (testState) {
+                        TestState.IDLE -> Color(0xFFCE93D8)
+                        TestState.RECORDING -> Color.Red
+                        TestState.PLAYING -> Color(0xFF4CAF50)
+                    },
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         when (testState) {
                             TestState.IDLE -> "测试变声效果"
                             TestState.RECORDING -> "录音中 ${testProgress}s..."
                             TestState.PLAYING -> "回放中..."
                         },
-                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                        color = Color.White, modifier = Modifier.weight(1f)
+                        fontSize = 13.sp, color = Color.White
                     )
-                    if (testState != TestState.IDLE) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp), strokeWidth = 2.dp,
-                            color = if (testState == TestState.RECORDING) Color.Red else Color(0xFF4CAF50)
-                        )
-                    } else {
-                        Button(
-                            onClick = {
-                                startVoiceTest(context, 3, { s -> testState = s }, { p -> testProgress = p })
-                            },
-                            modifier = Modifier.height(28.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
-                        ) { Text("开始", fontSize = 11.sp) }
+                    if (testState == TestState.IDLE) {
+                        Text("录制3秒 → 引擎处理 → 回放", fontSize = 10.sp, color = Color(0xFF666666))
                     }
                 }
-                if (testState == TestState.IDLE) {
-                    Text("录制 3 秒 → 引擎处理 → 回放", fontSize = 10.sp, color = Color(0xFF666666),
-                        modifier = Modifier.padding(start = 28.dp, top = 4.dp))
+                if (testState != TestState.IDLE) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp,
+                        color = if (testState == TestState.RECORDING) Color.Red else Color(0xFF4CAF50))
                 }
             }
         }
 
         Spacer(Modifier.height(12.dp))
+        Text("授权和方案配置 → 关于页右上角设置",
+            fontSize = 10.sp, color = Color(0xFF444444),
+            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+    }
+}
 
-        // 底部提示
-        Text(
-            "授权和方案配置 → 关于页右上角设置",
-            fontSize = 11.sp, color = Color(0xFF555555),
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center
+// ============================================================
+// 频响曲线图 (Canvas 绘图)
+// ============================================================
+
+@Composable
+private fun EqCurveGraph(
+    values: List<Float>,
+    labels: List<String>,
+    modifier: Modifier = Modifier
+) {
+    val primaryColor = Color(0xFFCE93D8)
+    val gridColor = Color(0xFF333333)
+    val textColor = Color(0xFF666666)
+    val curveColor = Color(0xFFCE93D8)
+    val fillColor = Color(0xFF4A2561)
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val padL = 32f
+        val padR = 16f
+        val padT = 16f
+        val padB = 24f
+        val graphW = w - padL - padR
+        val graphH = h - padT - padB
+        val bandCount = values.size
+        if (bandCount < 2 || graphW <= 0 || graphH <= 0) return@Canvas
+
+        // Y 轴范围 (-10dB ~ +10dB)
+        val yMin = -10f
+        val yMax = 10f
+        val yRange = yMax - yMin
+
+        // 网格线 (0dB 中心线 + ±5dB, ±10dB)
+        val gridLines = listOf(-10f, -5f, 0f, 5f, 10f)
+        for (g in gridLines) {
+            val y = padT + graphH * (1f - (g - yMin) / yRange)
+            drawLine(
+                color = if (g == 0f) Color(0xFF555555) else gridColor,
+                start = androidx.compose.ui.geometry.Offset(padL, y),
+                end = androidx.compose.ui.geometry.Offset(w - padR, y),
+                strokeWidth = if (g == 0f) 1.5f else 0.5f
+            )
+        }
+
+        // 绘制曲线路径
+        val path = androidx.compose.ui.graphics.Path()
+        val points = values.mapIndexed { i, v ->
+            val x = padL + graphW * i.toFloat() / (bandCount - 1).toFloat()
+            val y = padT + graphH * (1f - (v.coerceIn(-10f, 10f) - yMin) / yRange)
+            androidx.compose.ui.geometry.Offset(x, y)
+        }
+
+        if (points.isNotEmpty()) {
+            // 填充区域
+            val fillPath = androidx.compose.ui.graphics.Path()
+            fillPath.moveTo(points[0].x, padT + graphH)
+            points.forEach { fillPath.lineTo(it.x, it.y) }
+            fillPath.lineTo(points.last().x, padT + graphH)
+            fillPath.close()
+            drawPath(fillPath, fillColor.copy(alpha = 0.3f))
+
+            // 连线
+            path.moveTo(points[0].x, points[0].y)
+            for (i in 1 until points.size) {
+                path.lineTo(points[i].x, points[i].y)
+            }
+            drawPath(path, curveColor, style = Stroke(width = 2.5f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+
+            // 锚点
+            points.forEach { pt ->
+                drawCircle(curveColor, radius = 4f, center = pt)
+                drawCircle(Color.White, radius = 2f, center = pt)
+            }
+        }
+
+        // X 轴标签
+        labels.forEachIndexed { i, label ->
+            val x = padL + graphW * i.toFloat() / (bandCount - 1).toFloat()
+            drawContext.canvas.nativeCanvas.drawText(
+                label, x, h - 4f,
+                android.graphics.Paint().apply {
+                    color = 0xFF666666.toInt()
+                    textSize = 22f
+                    textAlign = android.graphics.Paint.Align.CENTER
+                }
+            )
+        }
+    }
+}
+
+// ============================================================
+// EQ 滑块组件（精简）
+// ============================================================
+
+@Composable
+fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("$label  ${"%.1f".format(value)}", fontSize = 11.sp, color = Color(0xFF888888), modifier = Modifier.width(80.dp))
+        Slider(
+            value = value, onValueChange = onChange, valueRange = range, steps = 19,
+            modifier = Modifier.weight(1f).height(24.dp),
+            colors = SliderDefaults.colors(thumbColor = Color(0xFFCE93D8), activeTrackColor = Color(0xFFCE93D8))
         )
     }
 }
