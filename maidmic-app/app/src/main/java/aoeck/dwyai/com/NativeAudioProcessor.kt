@@ -97,7 +97,5 @@ object NativeAudioProcessor {
 
     private external fun nativeProcessAudio(input: ByteArray, output: ByteArray, size: Int)
 
-    companion object {
-        private const val KEY_ENGINE = "audio_engine"
-    }
+    private const val KEY_ENGINE = "audio_engine"
 }
