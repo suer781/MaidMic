@@ -9,6 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -48,6 +52,7 @@ import aoeck.dwyai.com.ui.editor.ModuleChainEditor
 import aoeck.dwyai.com.ui.editor.PipelineNode
 import aoeck.dwyai.com.ui.CreditsPage
 import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
+import aoeck.dwyai.com.bridge.root.RootMicBridge
 
 // ============================================================
 // 导航项
@@ -129,6 +134,21 @@ fun MaidMicMain(context: Context) {
     var showSettings by remember { mutableStateOf(false) }
     var showEditor by remember { mutableStateOf(false) }
     var showCredits by remember { mutableStateOf(false) }
+
+    // 通知权限自动申请（Android 13+）
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            val hasNotif = ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasNotif) {
+                notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
 
     // 保存 UGC 状态
     LaunchedEffect(isUgcEnabled) {
@@ -583,6 +603,72 @@ fun EqPage(context: Context) {
             }
         }
 
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // 测试变声 — 录音 → 处理 → 回放
+        // ============================================================
+        var testState by remember { mutableStateOf(TestState.IDLE) }
+        var testProgress by remember { mutableIntStateOf(0) }
+
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = when (testState) {
+                    TestState.IDLE -> Color(0xFF1E1E1E)
+                    TestState.RECORDING -> Color(0xFF2A1A1A)
+                    TestState.PLAYING -> Color(0xFF1A2A1A)
+                }
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        when (testState) {
+                            TestState.IDLE -> Icons.Default.Mic
+                            TestState.RECORDING -> Icons.Default.FiberManualRecord
+                            TestState.PLAYING -> Icons.Default.PlayArrow
+                        },
+                        null,
+                        tint = when (testState) {
+                            TestState.IDLE -> Color(0xFFCE93D8)
+                            TestState.RECORDING -> Color.Red
+                            TestState.PLAYING -> Color(0xFF4CAF50)
+                        },
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        when (testState) {
+                            TestState.IDLE -> "测试变声效果"
+                            TestState.RECORDING -> "录音中 ${testProgress}s..."
+                            TestState.PLAYING -> "回放中..."
+                        },
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        color = Color.White, modifier = Modifier.weight(1f)
+                    )
+                    if (testState != TestState.IDLE) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp), strokeWidth = 2.dp,
+                            color = if (testState == TestState.RECORDING) Color.Red else Color(0xFF4CAF50)
+                        )
+                    } else {
+                        Button(
+                            onClick = {
+                                startVoiceTest(context, 3, { s -> testState = s }, { p -> testProgress = p })
+                            },
+                            modifier = Modifier.height(28.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                        ) { Text("开始", fontSize = 11.sp) }
+                    }
+                }
+                if (testState == TestState.IDLE) {
+                    Text("录制 3 秒 → 引擎处理 → 回放", fontSize = 10.sp, color = Color(0xFF666666),
+                        modifier = Modifier.padding(start = 28.dp, top = 4.dp))
+                }
+            }
+        }
+
         Spacer(Modifier.height(12.dp))
 
         // 底部提示
@@ -637,7 +723,15 @@ fun SettingsPage(
         Spacer(Modifier.height(8.dp))
 
         SettingsCard(icon = Icons.Default.Lock, title = "Root AudioFlinger", desc = "需要 ROOT 权限") {
-            Toast.makeText(context, "Root 模式待实现", Toast.LENGTH_SHORT).show()
+            // 检测 root → 启动 RootMicBridge
+            val rootBridge = RootMicBridge(context)
+            val status = rootBridge.checkRoot()
+            if (status.granted) {
+                Toast.makeText(context, "Root 已授权 (${status.magiskVer})", Toast.LENGTH_SHORT).show()
+                rootBridge.start()
+            } else {
+                Toast.makeText(context, "未检测到 root 权限", Toast.LENGTH_SHORT).show()
+            }
         }
         Spacer(Modifier.height(6.dp))
         SettingsCard(icon = Icons.Default.Security, title = "Shizuku AAudio", desc = "推荐 · 非 root") {
@@ -771,6 +865,13 @@ fun AboutPage(
 ) {
     var devClickCount by remember { mutableIntStateOf(0) }
     var shizukuStatus by remember { mutableStateOf(checkShizukuStatus()) }
+    var rootStatus by remember { mutableStateOf<RootMicBridge.RootStatus?>(null) }
+
+    // 检查 root 状态
+    LaunchedEffect(Unit) {
+        val bridge = RootMicBridge(context)
+        rootStatus = bridge.checkRoot()
+    }
 
     // 监听 Shizuku 授权状态变化
     DisposableEffect(Unit) {
@@ -835,6 +936,40 @@ fun AboutPage(
             }
         }
 
+        Spacer(Modifier.height(6.dp))
+
+        // Root 授权状态
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (rootStatus?.granted == true) Color(0xFF1B5E20) else Color(0xFF1E1E1E)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (rootStatus?.granted == true) Icons.Default.CheckCircle else Icons.Default.Lock,
+                    null,
+                    tint = if (rootStatus?.granted == true) Color.Green else Color(0xFF888888),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (rootStatus?.granted == true) "Root 已授权" else "Root 未检测到",
+                        fontSize = 12.sp,
+                        color = if (rootStatus?.granted == true) Color.Green else Color(0xFF888888)
+                    )
+                    if (rootStatus?.granted == true) {
+                        Text(
+                            rootStatus?.magiskVer ?: "",
+                            fontSize = 10.sp,
+                            color = Color(0xFF66BB6A)
+                        )
+                    }
+                }
+            }
+        }
+
         Spacer(Modifier.height(10.dp))
 
         Text("开源 Android 虚拟麦克风\n搭载自研 Echio 变声引擎", fontSize = 13.sp, color = Color(0xFF666666), textAlign = TextAlign.Center, lineHeight = 18.sp)
@@ -881,4 +1016,103 @@ fun SocialIcon(label: String, emoji: String, url: String, context: Context) {
         Spacer(Modifier.height(4.dp))
         Text(label, fontSize = 12.sp, color = Color(0xFFCE93D8))
     }
+}
+
+// ============================================================
+// 测试变声 — 录音 → 引擎处理 → 回放
+// ============================================================
+
+enum class TestState { IDLE, RECORDING, PLAYING }
+
+private fun startVoiceTest(
+    context: Context,
+    durationSec: Int,
+    onStateChange: (TestState) -> Unit,
+    onProgress: (Int) -> Unit
+) {
+    val sampleRate = 48000
+    val bufferSize = 4096
+    val totalSamples = sampleRate * durationSec
+    val allPcm = mutableListOf<ByteArray>()
+
+    Thread {
+        onStateChange(TestState.RECORDING)
+
+        val recorder = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize * 2
+            )
+        } catch (_: Exception) { null }
+
+        if (recorder == null || recorder.state != AudioRecord.STATE_INITIALIZED) {
+            recorder?.release()
+            onStateChange(TestState.IDLE)
+            return@Thread
+        }
+
+        recorder.startRecording()
+        val buf = ByteArray(bufferSize)
+        var totalRead = 0
+        var secondsElapsed = 0
+
+        while (totalRead < totalSamples * 2) {
+            val read = recorder.read(buf, 0, bufferSize)
+            if (read > 0) {
+                allPcm.add(buf.copyOf(read))
+                totalRead += read
+                val elapsed = totalRead / (sampleRate * 2)
+                if (elapsed > secondsElapsed) {
+                    secondsElapsed = elapsed
+                    onProgress(secondsElapsed.coerceAtMost(durationSec))
+                }
+            }
+        }
+        recorder.stop()
+        recorder.release()
+
+        onStateChange(TestState.PLAYING)
+        NativeAudioProcessor.ensureLoaded()
+        val processed = allPcm.map { chunk ->
+            val out = ByteArray(chunk.size)
+            NativeAudioProcessor.processAudio(chunk, out, chunk.size)
+            out
+        }
+
+        val totalSize = processed.sumOf { it.size }
+
+        val track = try {
+            AudioTrack.Builder()
+                .setAudioAttributes(android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build())
+                .setAudioFormat(AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build())
+                .setBufferSizeInBytes(bufferSize)
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .build()
+        } catch (_: Exception) { null }
+
+        if (track == null) {
+            onStateChange(TestState.IDLE)
+            return@Thread
+        }
+
+        track.play()
+        for (chunk in processed) {
+            track.write(chunk, 0, chunk.size)
+        }
+        Thread.sleep(500)
+        track.stop()
+        track.release()
+
+        onStateChange(TestState.IDLE)
+    }.start()
 }
