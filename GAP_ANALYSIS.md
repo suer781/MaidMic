@@ -22,10 +22,10 @@
 ### 行业变声器常见功能 ❌（MaidMic 缺失）
 | 功能 | 优先级 | 说明 |
 |------|--------|------|
-| **Formant Shifting** (共振峰偏移) | 🔴 高 | 让变调听起来自然，不产生"花栗鼠/巨人"效果 |
-| **Distortion** (失真) | 🔴 高 | Overdrive/Fuzz，机器人声、恶魔声 |
+| **Formant Shifting** (共振峰偏移) | ✅ 新增 | Shelving filter 补偿，±12 半音等效 |
+| **Distortion** (失真) | ✅ 新增 | 软削波 waveshaping，0~1 驱动量 |
+| **Echo/Delay** (回声) | ✅ 新增 | 反馈延迟线，最长 500ms |
 | **Chorus** (合唱) | 🟡 中 | 多层叠加，增加声音厚度 |
-| **Echo/Delay** (回声) | 🟡 中 | 与现有混响互补 |
 | **Noise Gate** (噪声门) | 🟡 中 | 消除背景噪音 |
 | **Bitcrushing** (降比特) | 🟢 低 | Lo-Fi 效果 |
 | **Vibrato** (颤音) | 🟢 低 | 周期性音高调制 |
@@ -45,16 +45,15 @@
 
 ## 建议下一步开发方向
 
-### 短期 (1-2 次开发)
-1. **Formant Shifting** — 最重要的缺失功能，配合现有 Pitch Shift 实现自然变声
-2. **Distortion** — 第二重要，能实现机器人、恶魔等经典效果
-3. **Suppress build warnings** — ✅ 已完成
-4. **Scrollable UI** — ✅ 已完成
+### 短期 (已实现 ✓)
+1. **Formant Shifting** — 配合 Pitch Shift 实现自然变声 ✅
+2. **Distortion** — 实现机器人、恶魔等经典效果 ✅
+3. **Echo/Delay** — 反馈延迟线，最长 500ms ✅
+4. **4 个新预设** — 机器人、恶魔、花栗鼠、幽灵 ✅
 
 ### 中期
-5. **Chorus + Echo** — 与 Reverb 统一管理
-6. **Noise Gate** — 提升音质下限
-7. **更低延迟** — 当前简单 DSP 延迟 ok，但 10 段 biquad 级联可能有延迟
+5. **Chorus + Noise Gate** — 提升音质下限
+6. **更低延迟** — 当前 10 段 biquad 级联 + 多效果可能有延迟
 
 ### 长期
 8. **Auto-Tune** — 需要音高检测算法
