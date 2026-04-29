@@ -137,15 +137,21 @@ object NativeAudioProcessor {
     }
 
     /** 设置 EQ 参数（Echio 引擎使用） */
-    fun setEqParams(gainDb: Float, bassDb: Float, trebleDb: Float, reverbMix: Float, pitchSemitones: Int) {
+    fun setEqParams(gainDb: Float, bassDb: Float, trebleDb: Float, reverbMix: Float, pitchSemitones: Int,
+                    formantShift: Float = 0f, distortion: Float = 0f,
+                    echoDelayMs: Float = 0f, echoDecay: Float = 0f) {
         if (!loaded) return
-        nativeSetEqParams(gainDb, bassDb, trebleDb, reverbMix, pitchSemitones)
+        nativeSetEqParams(gainDb, bassDb, trebleDb, reverbMix, pitchSemitones,
+                          formantShift, distortion, echoDelayMs, echoDecay)
     }
 
-    /** 设置混响和变调（频响曲线引擎共享使用） */
-    fun setReverbPitch(reverbMix: Float, pitchSemitones: Int) {
+    /** 设置混响、变调和新效果参数（频响曲线引擎共享使用） */
+    fun setReverbPitch(reverbMix: Float, pitchSemitones: Int,
+                       formantShift: Float = 0f, distortion: Float = 0f,
+                       echoDelayMs: Float = 0f, echoDecay: Float = 0f) {
         if (!loaded) return
-        nativeSetEqParams(0f, 0f, 0f, reverbMix, pitchSemitones)
+        nativeSetEqParams(0f, 0f, 0f, reverbMix, pitchSemitones,
+                          formantShift, distortion, echoDelayMs, echoDecay)
     }
 
     /** 处理一帧音频（16-bit PCM） */
@@ -179,7 +185,9 @@ object NativeAudioProcessor {
 
     private external fun nativeSetEqParams(
         gainDb: Float, bassDb: Float, trebleDb: Float,
-        reverbMix: Float, pitchSemitones: Int
+        reverbMix: Float, pitchSemitones: Int,
+        formantShift: Float, distortion: Float,
+        echoDelayMs: Float, echoDecay: Float
     )
 
     private external fun nativeProcessAudio(input: ByteArray, output: ByteArray, size: Int)

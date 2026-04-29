@@ -28,6 +28,12 @@ static struct {
     float reverb_mix;     // 混响混合比 (0 ~ 1)
     int pitch_semitones;  // 变调半音 (-12 ~ 12)
 
+    // 新增效果参数 ---
+    float formant_shift;  // 共振峰偏移 (-12 ~ +12 半音等效)
+    float distortion;     // 失真量 0~1
+    float echo_delay_ms;  // 回声延迟 (毫秒)
+    float echo_decay;     // 回声衰减 0~0.9
+
     // 滤波器状态（用于 Bass/Treble shelving filters）
     float bass_state;     // 低通滤波器记忆
     float treble_state;   // 高通滤波器记忆
@@ -35,7 +41,13 @@ static struct {
     // 混响延迟线（简单实现）
     float reverb_buf[48000]; // 1秒 @48kHz
     int reverb_pos;
-} dsp_state = {0, 0, 0, 0, 0, 0, 0, {0}, 0};
+
+    // 回声延迟线
+    float echo_buf[96000];   // 2秒 @48kHz
+    int echo_pos;
+    int echo_delay_samples;
+
+} dsp_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, 0, {0}, 0, 0};
 
 // ============================================================
 // Utils
@@ -55,12 +67,21 @@ static inline float clamp(float v, float min, float max) {
 // ============================================================
 
 void set_eq_params(float gain_db, float bass_db, float treble_db,
-                   float reverb_mix, int pitch_semitones) {
+                   float reverb_mix, int pitch_semitones,
+                   float formant_shift, float distortion,
+                   float echo_delay_ms, float echo_decay) {
     dsp_state.gain_db = gain_db;
     dsp_state.bass_db = bass_db;
     dsp_state.treble_db = treble_db;
     dsp_state.reverb_mix = clamp(reverb_mix, 0.0f, 1.0f);
     dsp_state.pitch_semitones = pitch_semitones;
+    dsp_state.formant_shift = clamp(formant_shift, -12.0f, 12.0f);
+    dsp_state.distortion = clamp(distortion, 0.0f, 1.0f);
+    dsp_state.echo_delay_ms = clamp(echo_delay_ms, 0.0f, 2000.0f);
+    dsp_state.echo_decay = clamp(echo_decay, 0.0f, 0.9f);
+    // 更新回声延迟样本数
+    dsp_state.echo_delay_samples = (int)(dsp_state.echo_delay_ms * 48.0f);
+    if (dsp_state.echo_delay_samples > 96000) dsp_state.echo_delay_samples = 96000;
 }
 
 // ============================================================
@@ -158,6 +179,62 @@ void process_audio_frame(int16_t* buffer, int frame_count, int sample_rate) {
                 buffer[i] = 0;
             }
             delete[] temp;
+        }
+    }
+
+    // --- Step 6: 共振峰偏移补偿（用 shelving filter 模拟）---
+    // 变调升高时补偿低频，变调降低时补偿高频
+    // 保持声音自然
+    {
+        float fs = dsp_state.formant_shift;
+        static float fs_state = 0;
+        if (fabsf(fs) > 0.5f) {
+            float alpha = (fs > 0) ? 0.12f : 0.08f; // 正偏移切低频，负偏移增强低频
+            float gain = db_to_linear(fs * 0.5f);
+            for (int i = 0; i < frame_count; i++) {
+                float lp = fs_state + alpha * (buffer[i] - fs_state);
+                fs_state = lp;
+                float hp = buffer[i] - lp;
+                buffer[i] = (int16_t)clamp(lp * (1.0f/gain) + hp * gain, -32768.0f, 32767.0f);
+            }
+        }
+    }
+
+    // --- Step 7: 失真 (Waveshaping) ---
+    if (dsp_state.distortion > 0.01f) {
+        float drive = 1.0f + dsp_state.distortion * 10.0f;
+        float threshold = 32768.0f / drive;
+        for (int i = 0; i < frame_count; i++) {
+            float sample = (float)buffer[i] * drive;
+            // 软削波 (tanh 近似)
+            float abs_s = fabsf(sample);
+            if (abs_s > threshold) {
+                sample = (sample > 0) ? threshold + (abs_s - threshold) * 0.3f : -threshold - (abs_s - threshold) * 0.3f;
+            }
+            sample = clamp(sample * (1.0f / (1.0f + dsp_state.distortion * 3.0f)), -32768.0f, 32767.0f);
+            buffer[i] = (int16_t)sample;
+        }
+    }
+
+    // --- Step 8: 回声 (Echo/Delay) ---
+    if (dsp_state.echo_delay_samples > 100 && dsp_state.echo_decay > 0.01f) {
+        int delay = dsp_state.echo_delay_samples;
+        if (delay > 96000) delay = 96000;
+        for (int i = 0; i < frame_count; i++) {
+            // 从延迟线读取
+            int read_pos = dsp_state.echo_pos - delay;
+            if (read_pos < 0) read_pos += 96000;
+            float wet = dsp_state.echo_buf[read_pos] * dsp_state.echo_decay;
+
+            // 写入延迟线（输入 + 反馈）
+            dsp_state.echo_buf[dsp_state.echo_pos] = (float)buffer[i] * 0.5f + wet * 0.5f;
+
+            // 混合干湿
+            buffer[i] = (int16_t)clamp(
+                (float)buffer[i] * 0.7f + wet * 0.3f,
+                -32768.0f, 32767.0f);
+
+            dsp_state.echo_pos = (dsp_state.echo_pos + 1) % 96000;
         }
     }
 }
@@ -363,9 +440,12 @@ JNIEXPORT void JNICALL
 Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetEqParams(
     JNIEnv* env, jclass clazz,
     jfloat gain_db, jfloat bass_db, jfloat treble_db,
-    jfloat reverb_mix, jint pitch_semitones) {
+    jfloat reverb_mix, jint pitch_semitones,
+    jfloat formant_shift, jfloat distortion,
+    jfloat echo_delay_ms, jfloat echo_decay) {
     (void)env; (void)clazz;
-    set_eq_params(gain_db, bass_db, treble_db, reverb_mix, pitch_semitones);
+    set_eq_params(gain_db, bass_db, treble_db, reverb_mix, pitch_semitones,
+                  formant_shift, distortion, echo_delay_ms, echo_decay);
 }
 
 // ============================================================

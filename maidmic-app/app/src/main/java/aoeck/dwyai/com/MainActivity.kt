@@ -353,15 +353,23 @@ fun MicModeCard(title: String, desc: String, icon: ImageVector, onClick: () -> U
 // EQ 调节页面（保持不变）
 // ============================================================
 
-data class EqPreset(val name: String, val gain: Float, val bass: Float, val treble: Float, val reverb: Float, val pitch: Int)
+data class EqPreset(val name: String, val gain: Float, val bass: Float, val treble: Float,
+                      val reverb: Float, val pitch: Int,
+                      val formant: Float = 0f, val distortion: Float = 0f,
+                      val echoDelay: Float = 0f, val echoDecay: Float = 0f)
 
 private val eqPresets = listOf(
-    EqPreset("原声", 0f, 0f, 0f, 0f, 0),
-    EqPreset("增强", 3f, 2f, 3f, 0.1f, 0),
-    EqPreset("低沉", 2f, 5f, -3f, 0.2f, -3),
-    EqPreset("萝莉", 4f, -2f, 4f, 0.1f, 6),
-    EqPreset("大叔", 2f, 3f, -2f, 0.3f, -5),
-    EqPreset("混响", -1f, 1f, 1f, 0.8f, 0),
+    EqPreset("原声", 0f, 0f, 0f, 0f, 0, 0f, 0f, 0f, 0f),
+    EqPreset("增强", 3f, 2f, 3f, 0.1f, 0, 0f, 0f, 0f, 0f),
+    EqPreset("低沉", 2f, 5f, -3f, 0.2f, -3, 3f, 0f, 0f, 0f),
+    EqPreset("萝莉", 4f, -2f, 4f, 0.1f, 6, -3f, 0f, 0f, 0f),
+    EqPreset("大叔", 2f, 3f, -2f, 0.3f, -5, 4f, 0f, 0f, 0f),
+    EqPreset("混响", -1f, 1f, 1f, 0.8f, 0, 0f, 0f, 0f, 0f),
+    // 新预设
+    EqPreset("机器人", 3f, 0f, 0f, 0.2f, 1, 0f, 0.5f, 0f, 0f),
+    EqPreset("恶魔", 2f, 4f, -4f, 0.3f, -6, 5f, 0.4f, 80f, 0.3f),
+    EqPreset("花栗鼠", 6f, -4f, 5f, 0f, 10, -4f, 0f, 0f, 0f),
+    EqPreset("幽灵", 0f, -2f, 2f, 0.7f, 3, 0f, 0f, 200f, 0.5f),
 )
 
 @Composable
@@ -375,6 +383,10 @@ fun EqPage(context: Context) {
     var treble by remember { mutableFloatStateOf(prefs.getFloat("treble", 0f)) }
     var reverb by remember { mutableFloatStateOf(prefs.getFloat("reverb", 0f)) }
     var pitch by remember { mutableIntStateOf(prefs.getInt("pitch", 0)) }
+    var formant by remember { mutableFloatStateOf(prefs.getFloat("formant", 0f)) }
+    var distortion by remember { mutableFloatStateOf(prefs.getFloat("distortion", 0f)) }
+    var echoDelay by remember { mutableFloatStateOf(prefs.getFloat("echo_delay", 0f)) }
+    var echoDecay by remember { mutableFloatStateOf(prefs.getFloat("echo_decay", 0f)) }
 
     // 引擎选择（同步到 app prefs）
     var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
@@ -390,9 +402,14 @@ fun EqPage(context: Context) {
             .putFloat("treble", treble)
             .putFloat("reverb", reverb)
             .putInt("pitch", pitch)
+            .putFloat("formant", formant)
+            .putFloat("distortion", distortion)
+            .putFloat("echo_delay", echoDelay)
+            .putFloat("echo_decay", echoDecay)
             .apply()
         NativeAudioProcessor.ensureLoaded()
-        NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch)
+        NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch,
+            formant, distortion, echoDelay, echoDecay)
     }
 
     fun applyEngine(engine: AudioEngine) {
@@ -465,7 +482,11 @@ fun EqPage(context: Context) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     eqPresets.forEachIndexed { i, preset ->
                         FilterChip(selected = i == selectedPreset, onClick = {
-                            selectedPreset = i; gain = preset.gain; bass = preset.bass; treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch; save()
+                            selectedPreset = i; gain = preset.gain; bass = preset.bass
+                            treble = preset.treble; reverb = preset.reverb; pitch = preset.pitch
+                            formant = preset.formant; distortion = preset.distortion
+                            echoDelay = preset.echoDelay; echoDecay = preset.echoDecay
+                            save()
                         }, label = { Text(preset.name, fontSize = 12.sp) },
                             colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
                     }
@@ -477,6 +498,14 @@ fun EqPage(context: Context) {
                 EqSlider("混响", reverb, 0f..1f) { reverb = it; save() }
                 Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
                 Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt(); save() }, valueRange = -12f..12f, steps = 23)
+
+                Spacer(Modifier.height(12.dp))
+                Text("效果器", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+                Spacer(Modifier.height(4.dp))
+                EqSlider("共振峰偏移", formant, -12f..12f) { formant = it; save() }
+                EqSlider("失真", distortion, 0f..1f) { distortion = it; save() }
+                EqSlider("回声延迟 (ms)", echoDelay, 0f..500f) { echoDelay = it; save() }
+                EqSlider("回声衰减", echoDecay, 0f..0.9f) { echoDecay = it; save() }
             }
 
             AudioEngine.FREQ_CURVE -> {
@@ -518,15 +547,39 @@ fun EqPage(context: Context) {
                 Spacer(Modifier.height(6.dp))
                 EqSlider("混响", reverb, 0f..1f) { reverb = it
                     NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch)
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
                     prefs.edit().putFloat("reverb", reverb).apply()
                 }
                 Text("变调（半音）: $pitch", fontSize = 13.sp, color = Color(0xFFBBBBBB))
                 Slider(value = pitch.toFloat(), onValueChange = { pitch = it.toInt()
                     NativeAudioProcessor.ensureLoaded()
-                    NativeAudioProcessor.setReverbPitch(reverb, pitch)
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
                     prefs.edit().putInt("pitch", pitch).apply()
                 }, valueRange = -12f..12f, steps = 23)
+
+                Spacer(Modifier.height(12.dp))
+                Text("效果器", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+                Spacer(Modifier.height(4.dp))
+                EqSlider("共振峰偏移", formant, -12f..12f) { formant = it
+                    NativeAudioProcessor.ensureLoaded()
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
+                    prefs.edit().putFloat("formant", formant).apply()
+                }
+                EqSlider("失真", distortion, 0f..1f) { distortion = it
+                    NativeAudioProcessor.ensureLoaded()
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
+                    prefs.edit().putFloat("distortion", distortion).apply()
+                }
+                EqSlider("回声延迟 (ms)", echoDelay, 0f..500f) { echoDelay = it
+                    NativeAudioProcessor.ensureLoaded()
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
+                    prefs.edit().putFloat("echo_delay", echoDelay).apply()
+                }
+                EqSlider("回声衰减", echoDecay, 0f..0.9f) { echoDecay = it
+                    NativeAudioProcessor.ensureLoaded()
+                    NativeAudioProcessor.setReverbPitch(reverb, pitch, formant, distortion, echoDelay, echoDecay)
+                    prefs.edit().putFloat("echo_decay", echoDecay).apply()
+                }
             }
         }
 
