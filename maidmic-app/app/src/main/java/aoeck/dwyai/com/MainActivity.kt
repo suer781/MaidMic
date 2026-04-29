@@ -846,15 +846,8 @@ fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>
     }
 }
 
-@Composable
-fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
-    Text("${label}: ${"%.1f".format(value)}", fontSize = 13.sp, color = Color(0xFFBBBBBB))
-    Slider(value = value, onValueChange = onChange, valueRange = range, steps = 19)
-    Spacer(Modifier.height(6.dp))
-}
-
 // ============================================================
-// 设置页面（权限、外观、模块链入口）
+// 测试变声 — 录音 → 引擎处理 → 回放
 // ============================================================
 // 设置页面（权限、外观、模块链入口）
 @Composable
