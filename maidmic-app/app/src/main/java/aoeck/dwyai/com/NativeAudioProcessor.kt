@@ -101,9 +101,10 @@ object NativeAudioProcessor {
                 input[i * 2 + 1] = ((sample.toInt() shr 8) and 0xFF).toByte()
             }
 
-            // 保存原引擎，临时切到 ECHIO_EQ 并设非零参数
+            // 保存原引擎状态和参数
             val savedEngine = currentEngine
             val savedCurve = currentCurvePreset
+            val savedParams = pendingParams
             if (loaded) {
                 // 设一个明显非零参数确保引擎会处理
                 nativeSetEqParams(5f, 0f, 0f, 0f, 0, 0f, 0f, 0f, 0f)
@@ -115,9 +116,18 @@ object NativeAudioProcessor {
             val output = ByteArray(sampleCount * 2)
             processAudio(input, output, sampleCount * 2)
 
-            // 恢复引擎状态
-            if (loaded && savedEngine == AudioEngine.FREQ_CURVE) {
-                setCurvePreset(savedCurve)
+            // 恢复引擎状态和参数（确保不自测污染用户设置）
+            if (loaded) {
+                if (savedEngine == AudioEngine.FREQ_CURVE) {
+                    setCurvePreset(savedCurve)
+                } else {
+                    // 恢复 ECHIO_EQ 参数
+                    savedParams?.let {
+                        nativeSetEqParams(it.gainDb, it.bassDb, it.trebleDb, it.reverbMix,
+                            it.pitchSemitones, it.formantShift, it.distortion,
+                            it.echoDelayMs, it.echoDecay)
+                    } ?: nativeSetEqParams(0f, 0f, 0f, 0f, 0, 0f, 0f, 0f, 0f)
+                }
             }
             currentEngine = savedEngine
 
