@@ -335,6 +335,18 @@ fun MaidMicMain(context: Context) {
 
 @Composable
 fun OnboardingPage(context: Context, onDone: () -> Unit) {
+    // 当前权限状态（响应式 — 随权限回调更新）
+    var hasMicState by remember { mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    ) }
+    var hasNotifState by remember { mutableStateOf(
+        if (Build.VERSION.SDK_INT >= 33)
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        else true
+    ) }
+    val hasMic = hasMicState
+    val hasNotif = hasNotifState
+
     // 权限请求（多个权限一次请求）
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -363,18 +375,6 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
         Shizuku.addRequestPermissionResultListener(listener)
         onDispose { Shizuku.removeRequestPermissionResultListener(listener) }
     }
-
-    // 当前权限状态（响应式 — 随权限回调更新）
-    var hasMicState by remember { mutableStateOf(
-        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    ) }
-    var hasNotifState by remember { mutableStateOf(
-        if (Build.VERSION.SDK_INT >= 33)
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        else true
-    ) }
-    val hasMic = hasMicState
-    val hasNotif = hasNotifState
 
     // 自动请求权限（首次进入时）
     LaunchedEffect(Unit) {
