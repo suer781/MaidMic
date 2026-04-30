@@ -928,7 +928,8 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                     Text("回声消除 (AEC)", fontSize = 12.sp, color = Color.White, modifier = Modifier.weight(1f))
                     Switch(checked = aecOn, onCheckedChange = {
                         aecOn = it; AudioLoopback.setAecEnabled(it)
-                        AppLogger.i("AEC", "AEC ${if(it) \"开启\" else \"关闭\"}")
+                        val label = if (it) "开启" else "关闭"
+                        AppLogger.i("AEC", "AEC $label")
                     }, modifier = Modifier.height(20.dp),
                     colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8)))
                 }
