@@ -34,6 +34,12 @@ static struct {
     float echo_delay_ms;  // 回声延迟 (毫秒)
     float echo_decay;     // 回声衰减 0~0.9
 
+    // 压缩机参数
+    float comp_threshold; // 阈值 dB (-60 ~ 0)
+    float comp_ratio;     // 压缩比 (1 ~ 20)
+    float comp_makeup;    // 补偿增益 dB (0 ~ 20)
+    float comp_env;       // 包络跟随器状态
+
     // 滤波器状态（用于 Bass/Treble shelving filters）
     float bass_state;     // 低通滤波器记忆
     float treble_state;   // 高通滤波器记忆
@@ -47,7 +53,7 @@ static struct {
     int echo_pos;
     int echo_delay_samples;
 
-} dsp_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, 0, {0}, 0, 0};
+|} dsp_state = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, 0, {0}, 0, 0};
 
 // ============================================================
 // Utils
@@ -85,6 +91,15 @@ void set_eq_params(float gain_db, float bass_db, float treble_db,
 }
 
 // ============================================================
+// 设置压缩机参数
+// ============================================================
+void set_compressor_params(float threshold_db, float ratio, float makeup_gain_db) {
+    dsp_state.comp_threshold = clamp(threshold_db, -60.0f, 0.0f);
+    dsp_state.comp_ratio = clamp(ratio, 1.0f, 20.0f);
+    dsp_state.comp_makeup = clamp(makeup_gain_db, 0.0f, 20.0f);
+}
+
+// ============================================================
 // 处理一帧音频（16-bit PCM）
 // Process one audio frame (16-bit PCM)
 // ============================================================
@@ -108,6 +123,38 @@ void process_audio_frame(int16_t* buffer, int frame_count, int sample_rate) {
             float sample = buffer[i] * gain_linear;
             sample = clamp(sample, -32768.0f, 32767.0f);
             buffer[i] = (int16_t)sample;
+        }
+    }
+
+    // --- Step 1b: 压缩机 (Compressor) — 炸麦效果核心 ---
+    if (dsp_state.comp_ratio > 1.0f) {
+        float threshold_linear = db_to_linear(dsp_state.comp_threshold); // 0~1
+        float makeup_linear = db_to_linear(dsp_state.comp_makeup);
+        float attack = 0.1f;   // 快速启动
+        float release = 0.01f; // 慢释放
+
+        for (int i = 0; i < frame_count; i++) {
+            float sample = (float)buffer[i] / 32768.0f; // 归一化到 -1~1
+            float abs_s = fabsf(sample);
+
+            // 包络跟随 (RMS 近似)
+            dsp_state.comp_env += (abs_s - dsp_state.comp_env) *
+                (abs_s > dsp_state.comp_env ? attack : release);
+
+            // 计算增益衰减
+            float gain_reduction = 1.0f;
+            if (dsp_state.comp_env > threshold_linear) {
+                float above = dsp_state.comp_env - threshold_linear;
+                float db_above = 20.0f * log10f(dsp_state.comp_env / threshold_linear);
+                float compressed_db = db_above / dsp_state.comp_ratio;
+                float compressed_linear = powf(10.0f, compressed_db / 20.0f);
+                gain_reduction = compressed_linear / (dsp_state.comp_env / threshold_linear);
+            }
+
+            // 应用压缩 + 补偿增益
+            sample *= gain_reduction * makeup_linear;
+            sample = clamp(sample, -1.0f, 1.0f);
+            buffer[i] = (int16_t)(sample * 32768.0f);
         }
     }
 
@@ -489,6 +536,17 @@ Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetEqParams(
     (void)env; (void)clazz;
     set_eq_params(gain_db, bass_db, treble_db, reverb_mix, pitch_semitones,
                   formant_shift, distortion, echo_delay_ms, echo_decay);
+}
+
+// ============================================================
+// JNI: 设置压缩机参数
+// ============================================================
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetCompressor(
+    JNIEnv* env, jclass clazz,
+    jfloat threshold_db, jfloat ratio, jfloat makeup_gain_db) {
+    (void)env; (void)clazz;
+    set_compressor_params(threshold_db, ratio, makeup_gain_db);
 }
 
 // ============================================================
