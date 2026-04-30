@@ -22,7 +22,8 @@ data class LogEntry(
     val level: LogLevel,
     val tag: String,       // 模块名
     val message: String,
-    val throwable: String? = null
+    val throwable: String? = null,
+    val thread: String = Thread.currentThread().name  // 线程名
 ) {
     val formattedTime: String
         get() = dateFormat.format(Date(timestamp))
