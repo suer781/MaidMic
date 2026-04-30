@@ -209,6 +209,12 @@ fun MaidMicMain(context: Context) {
             eqPrefs.getFloat("echo_delay", 0f),
             eqPrefs.getFloat("echo_decay", 0f)
         )
+        // 如果是 FREQ_CURVE 引擎，恢复曲线预设
+        if (NativeAudioProcessor.getEngine() == AudioEngine.FREQ_CURVE) {
+            val savedCurve = prefs.getInt("curve_preset", 0)
+            NativeAudioProcessor.setCurvePreset(savedCurve)
+            AppLogger.i("Engine", "频响曲线预设已恢复: index=$savedCurve")
+        }
         AppLogger.i("Engine", "DSP参数已初始化到引擎")
     }
 
@@ -1668,6 +1674,13 @@ private fun startVoiceTest(
 
         val totalSize = processed.sumOf { it.size }
 
+        // 用 getMinBufferSize 计算最佳播放缓冲
+        val playBufferSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(bufferSize)
+
         val track = try {
             AudioTrack.Builder()
                 .setAudioAttributes(android.media.AudioAttributes.Builder()
@@ -1679,7 +1692,7 @@ private fun startVoiceTest(
                     .setSampleRate(sampleRate)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build())
-                .setBufferSizeInBytes(bufferSize)
+                .setBufferSizeInBytes(playBufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
         } catch (e: Exception) {
