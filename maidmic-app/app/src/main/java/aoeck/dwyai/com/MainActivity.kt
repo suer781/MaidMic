@@ -865,8 +865,57 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
         Spacer(Modifier.height(14.dp))
 
         // ============================================================
-        // 测试变声按钮
-        // 测试变声按钮
+        // 实时环回按钮（游戏/通话使用，非扬声器回放测试）
+        // ============================================================
+        var isLooping by remember { mutableStateOf(false) }
+        Surface(
+            onClick = {
+                if (!isLooping) {
+                    val hasMic = ContextCompat.checkSelfPermission(context,
+                        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (!hasMic) {
+                        Toast.makeText(context, "缺少录音权限", Toast.LENGTH_SHORT).show()
+                        return@Surface
+                    }
+                    isLooping = true
+                    AudioLoopback.start(context)
+                    Toast.makeText(context, "实时变声已启动（戴上耳机避免回声）", Toast.LENGTH_LONG).show()
+                    AppLogger.i("Loopback", "实时环回启动")
+                } else {
+                    isLooping = false
+                    AudioLoopback.stop(context)
+                    Toast.makeText(context, "实时变声已停止", Toast.LENGTH_SHORT).show()
+                    AppLogger.i("Loopback", "实时环回停止")
+                }
+            },
+            color = if (isLooping) Color(0xFF1A4A1A) else Color(0xFF2A2930),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (isLooping) Icons.Default.FiberManualRecord else Icons.Default.PlayCircle,
+                    null,
+                    tint = if (isLooping) Color.Red else Color(0xFF80CBC4),
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(if (isLooping) "🟢 实时变声中..." else "🎤 启动实时变声",
+                        fontSize = 13.sp, color = Color.White)
+                    Text(if (isLooping) "音频环回运行中，戴耳机避免回声"
+                        else "游戏/通话中实时变声，戴上耳机使用",
+                        fontSize = 10.sp, color = Color(0xFF888888))
+                }
+                if (isLooping) {
+                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color.Red)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // ============================================================
+        // 测试变声按钮（仅用于效果验证，建议戴耳机）
         Surface(
             onClick = {
                 if (testState == TestState.IDLE) {
