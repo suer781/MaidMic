@@ -134,6 +134,16 @@ fun MaidMicTheme(content: @Composable () -> Unit) {
 fun MaidMicMain(context: Context) {
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    // ---------- 启动日志 ----------
+    AppLogger.logDeviceInfo(context)
+    AppLogger.i("Main", "MaidMic 启动")
+
+    val hasMicPerm = ContextCompat.checkSelfPermission(context,
+        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    AppLogger.i("Main", "录音权限: ${if (hasMicPerm) "已授权" else "未授权"}")
+    AppLogger.i("Main", "引擎: ${NativeAudioProcessor.getEngine().key}")
+    // ----------------------------
+
     var showOnboarding by remember { mutableStateOf(!prefs.getBoolean(KEY_ONBOARDING_DONE, false)) }
     var currentNav: NavItem by remember { mutableStateOf(NavItem.Basic) }
     var pipelineNodes by remember { mutableStateOf(listOf<PipelineNode>()) }
@@ -148,13 +158,16 @@ fun MaidMicMain(context: Context) {
     // 通知权限自动申请（Android 13+）
     val notifPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { }
+    ) { granted ->
+        AppLogger.i("Main", "通知权限申请结果: ${if (granted) "已授权" else "已拒绝"}")
+    }
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33) {
             val hasNotif = ContextCompat.checkSelfPermission(
                 context, Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
             if (!hasNotif) {
+                AppLogger.i("Main", "尝试申请通知权限")
                 notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
@@ -163,11 +176,13 @@ fun MaidMicMain(context: Context) {
     // 保存 UGC 状态
     LaunchedEffect(isUgcEnabled) {
         prefs.edit().putBoolean(KEY_UGC_ENABLED, isUgcEnabled).apply()
+        AppLogger.i("UGC", "UGC 插件: ${if (isUgcEnabled) "启用" else "禁用"}")
     }
 
     // 启动时恢复引擎设置
     LaunchedEffect(Unit) {
         NativeAudioProcessor.loadEngine(prefs)
+        AppLogger.i("Engine", "引擎已加载: ${NativeAudioProcessor.getEngine().key}")
     }
 
     if (showOnboarding) {
@@ -707,11 +722,24 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
 
         // ============================================================
         // 测试变声按钮
-        // ============================================================
+        // 测试变声按钮
         Surface(
             onClick = {
                 if (testState == TestState.IDLE) {
-                    startVoiceTest(context, 3, { s -> testState = s }, { p -> testProgress = p })
+                    AppLogger.i("Test", "用户点击测试变声按钮")
+                    // 检查录音权限
+                    val hasMic = ContextCompat.checkSelfPermission(context,
+                        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (!hasMic) {
+                        AppLogger.e("Test", "测试失败：无录音权限")
+                        Toast.makeText(context, "测试失败：缺少录音权限", Toast.LENGTH_SHORT).show()
+                    } else {
+                        startVoiceTest(context, 3,
+                            { s -> testState = s; AppLogger.i("Test", "状态: $s") },
+                            { p -> testProgress = p },
+                            { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
+                        )
+                    }
                 }
             },
             color = when (testState) {
@@ -1422,14 +1450,26 @@ private fun startVoiceTest(
     context: Context,
     durationSec: Int,
     onStateChange: (TestState) -> Unit,
-    onProgress: (Int) -> Unit
+    onProgress: (Int) -> Unit,
+    onError: (String) -> Unit = {}
 ) {
     val sampleRate = 48000
     val bufferSize = 4096
     val totalSamples = sampleRate * durationSec
     val allPcm = mutableListOf<ByteArray>()
 
+    // 先检查权限
+    val hasMic = ContextCompat.checkSelfPermission(context,
+        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    if (!hasMic) {
+        val msg = "缺少录音权限，请在设置中授予"
+        AppLogger.e("Test", msg)
+        onError(msg)
+        return
+    }
+
     Thread {
+        AppLogger.i("Test", "开始录音 (${durationSec}s)")
         onStateChange(TestState.RECORDING)
 
         val recorder = try {
@@ -1440,15 +1480,24 @@ private fun startVoiceTest(
                 AudioFormat.ENCODING_PCM_16BIT,
                 bufferSize * 2
             )
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            AppLogger.e("Test", "AudioRecord 创建失败", e)
+            onError("录音创建失败: ${e.message}")
+            onStateChange(TestState.IDLE)
+            return@Thread
+        }
 
         if (recorder == null || recorder.state != AudioRecord.STATE_INITIALIZED) {
+            val stateName = recorder?.state?.let { "$it" } ?: "null"
+            AppLogger.e("Test", "AudioRecord 未初始化 (state=$stateName)")
+            onError("录音器初始化失败 (state=$stateName)")
             recorder?.release()
             onStateChange(TestState.IDLE)
             return@Thread
         }
 
         recorder.startRecording()
+        AppLogger.i("Test", "录音器已启动")
         val buf = ByteArray(bufferSize)
         var totalRead = 0
         var secondsElapsed = 0
@@ -1463,11 +1512,17 @@ private fun startVoiceTest(
                     secondsElapsed = elapsed
                     onProgress(secondsElapsed.coerceAtMost(durationSec))
                 }
+            } else if (read < 0) {
+                AppLogger.e("Test", "录音读取错误: read=$read")
+                onError("录音错误 (code=$read)")
+                break
             }
         }
+        AppLogger.i("Test", "录音完成: ${allPcm.size} 块, ${totalRead} 字节")
         recorder.stop()
         recorder.release()
 
+        AppLogger.i("Test", "开始引擎处理...")
         onStateChange(TestState.PLAYING)
         NativeAudioProcessor.ensureLoaded()
         val processed = allPcm.map { chunk ->
@@ -1475,6 +1530,7 @@ private fun startVoiceTest(
             NativeAudioProcessor.processAudio(chunk, out, chunk.size)
             out
         }
+        AppLogger.i("Test", "引擎处理完成: ${processed.size} 块")
 
         val totalSize = processed.sumOf { it.size }
 
@@ -1492,13 +1548,18 @@ private fun startVoiceTest(
                 .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            AppLogger.e("Test", "AudioTrack 创建失败", e)
+            onError("回放创建失败: ${e.message}")
+            null
+        }
 
         if (track == null) {
             onStateChange(TestState.IDLE)
             return@Thread
         }
 
+        AppLogger.i("Test", "开始回放...")
         track.play()
         for (chunk in processed) {
             track.write(chunk, 0, chunk.size)
@@ -1506,6 +1567,7 @@ private fun startVoiceTest(
         Thread.sleep(500)
         track.stop()
         track.release()
+        AppLogger.i("Test", "回放完成")
 
         onStateChange(TestState.IDLE)
     }.start()
