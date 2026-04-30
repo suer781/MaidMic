@@ -561,7 +561,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
     val appPrefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
 
     // 首页模式（读取设置页保存的值）
-    var eqMode by remember { mutableIntStateOf(appPrefs.getInt("settings_mode", 1)) }
+    var eqMode by remember { mutableStateOf(appPrefs.getInt("settings_mode", 1)) }
 
     var selectedPreset by remember { mutableIntStateOf(prefs.getInt("preset", 0)) }
     var gain by remember { mutableFloatStateOf(prefs.getFloat("gain", 0f)) }
