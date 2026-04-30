@@ -190,10 +190,24 @@ fun MaidMicMain(context: Context) {
         onDispose { Shizuku.removeRequestPermissionResultListener(listener) }
     }
 
-    // 启动时恢复引擎设置
+    // 启动时恢复引擎设置 + 应用当前预设参数到引擎
     LaunchedEffect(Unit) {
         NativeAudioProcessor.loadEngine(prefs)
         AppLogger.i("Engine", "引擎已加载: ${NativeAudioProcessor.getEngine().key}")
+        // 确保 DSP 参数已初始化（即使使用默认预设）
+        val eqPrefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+        NativeAudioProcessor.setEqParams(
+            eqPrefs.getFloat("gain", 0f),
+            eqPrefs.getFloat("bass", 0f),
+            eqPrefs.getFloat("treble", 0f),
+            eqPrefs.getFloat("reverb", 0f),
+            eqPrefs.getInt("pitch", 0),
+            eqPrefs.getFloat("formant", 0f),
+            eqPrefs.getFloat("distortion", 0f),
+            eqPrefs.getFloat("echo_delay", 0f),
+            eqPrefs.getFloat("echo_decay", 0f)
+        )
+        AppLogger.i("Engine", "DSP参数已初始化到引擎")
     }
 
     if (showOnboarding) {
