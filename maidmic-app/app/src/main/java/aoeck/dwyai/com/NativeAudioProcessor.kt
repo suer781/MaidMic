@@ -262,6 +262,19 @@ object NativeAudioProcessor {
                     formantShift, distortion, echoDelayMs, echoDecay)
     }
 
+    /** 设置压缩机参数 */
+    fun setCompressor(thresholdDb: Float, ratio: Float, makeupGainDb: Float) {
+        val t = thresholdDb.coerceIn(-60f, 0f)
+        val r = ratio.coerceIn(1f, 20f)
+        val m = makeupGainDb.coerceIn(0f, 20f)
+        if (!loaded) {
+            AppLogger.w("Engine", "setCompressor: JNI未加载")
+            return
+        }
+        AppLogger.i("Engine", "setCompressor: threshold=$t ratio=$r makeup=$m")
+        nativeSetCompressor(t, r, m)
+    }
+
     // ============================================================
     // 音频处理（三层降级）
     // ============================================================
@@ -333,6 +346,7 @@ object NativeAudioProcessor {
     private external fun nativeProcessAudio(input: ByteArray, output: ByteArray, size: Int)
     private external fun nativeSetFreqCurve(bands: FloatArray, preRender: FloatArray?, sampleRate: Int)
     private external fun nativeProcessFreqCurve(input: ByteArray, output: ByteArray, size: Int)
+    private external fun nativeSetCompressor(thresholdDb: Float, ratio: Float, makeupGainDb: Float)
 
     private const val KEY_ENGINE = "audio_engine"
     private const val KEY_CURVE_PRESET = "curve_preset"
