@@ -928,9 +928,104 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
         }
 
         Spacer(Modifier.height(12.dp))
-        Text("授权和方案配置 → 关于页右上角设置",
-            fontSize = 10.sp, color = Color(0xFF444444),
-            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+
+        // ============================================================
+        // 可折叠高级音频设置（引擎 + 格式 + 缓冲）
+        // ============================================================
+        var showAdvanced by remember { mutableStateOf(false) }
+        Surface(
+            onClick = { showAdvanced = !showAdvanced },
+            color = Color(0xFF2A2930),
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Tune, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("音频设置", fontSize = 13.sp, color = Color.White, modifier = Modifier.weight(1f))
+                Icon(if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null,
+                    tint = Color(0xFF888888), modifier = Modifier.size(18.dp))
+            }
+        }
+        if (showAdvanced) {
+            Spacer(Modifier.height(6.dp))
+            val audioPrefs = context.getSharedPreferences("maidmic_audio_params", Context.MODE_PRIVATE)
+            val advSampleRate = remember { mutableIntStateOf(audioPrefs.getInt("sample_rate", 48000)) }
+            val advBitDepth = remember { mutableIntStateOf(audioPrefs.getInt("bit_depth", 16)) }
+            val advChannels = remember { mutableIntStateOf(audioPrefs.getInt("channels", 2)) }
+            val advBitrate = remember { mutableIntStateOf(audioPrefs.getInt("bitrate", 192)) }
+            val advBufSize = remember { mutableIntStateOf(audioPrefs.getInt("buffer_size", 256)) }
+            val advFrameSize = remember { mutableIntStateOf(audioPrefs.getInt("frame_size", 1024)) }
+            val advOverlap = remember { mutableIntStateOf(audioPrefs.getInt("overlap_ratio", 50)) }
+            fun saveAd() {
+                audioPrefs.edit()
+                    .putInt("sample_rate", advSampleRate.intValue)
+                    .putInt("bit_depth", advBitDepth.intValue)
+                    .putInt("channels", advChannels.intValue)
+                    .putInt("bitrate", advBitrate.intValue)
+                    .putInt("buffer_size", advBufSize.intValue)
+                    .putInt("frame_size", advFrameSize.intValue)
+                    .putInt("overlap_ratio", advOverlap.intValue)
+                    .apply()
+            }
+            // 格式行
+            Text("格式", fontSize = 11.sp, color = Color(0xFFBBBBBB))
+            Spacer(Modifier.height(4.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(44100 to "44.1k", 48000 to "48k", 96000 to "96k").forEach { (v, l) ->
+                    FilterChip(selected = advSampleRate.intValue == v,
+                        onClick = { advSampleRate.intValue = v; saveAd() },
+                        label = { Text(l, fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(16 to "16bit", 24 to "24bit", 32 to "32Float").forEach { (v, l) ->
+                    FilterChip(selected = advBitDepth.intValue == v,
+                        onClick = { advBitDepth.intValue = v; saveAd() },
+                        label = { Text(l, fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
+                }
+                listOf(1 to "Mono", 2 to "Stereo").forEach { (v, l) ->
+                    FilterChip(selected = advChannels.intValue == v,
+                        onClick = { advChannels.intValue = v; saveAd() },
+                        label = { Text(l, fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            // 缓冲行
+            Text("缓冲", fontSize = 11.sp, color = Color(0xFFBBBBBB))
+            Spacer(Modifier.height(4.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(64, 128, 256, 512, 1024).forEach { v ->
+                    FilterChip(selected = advBufSize.intValue == v,
+                        onClick = { advBufSize.intValue = v; saveAd() },
+                        label = { Text("$v", fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(256 to "256w", 512 to "512w", 1024 to "1024w", 2048 to "2048w").forEach { (v, l) ->
+                    FilterChip(selected = advFrameSize.intValue == v,
+                        onClick = { advFrameSize.intValue = v; saveAd() },
+                        label = { Text(l, fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(0 to "0%", 25 to "25%", 50 to "50%", 75 to "75%").forEach { (v, l) ->
+                    FilterChip(selected = advOverlap.intValue == v,
+                        onClick = { advOverlap.intValue = v; saveAd() },
+                        label = { Text(l, fontSize = 10.sp) },
+                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            val hop = (advFrameSize.intValue * (100 - advOverlap.intValue) / 100).coerceAtLeast(1)
+            Text("帧移: $hop 样本 · 延迟: ${advBufSize.intValue * 1000 / 48000}ms",
+                fontSize = 10.sp, color = Color(0xFF555555))
+        }
     }
 }
 
@@ -1094,8 +1189,37 @@ fun SettingsPage(
         Spacer(Modifier.height(16.dp))
 
         // ============================================================
-        // 音频格式（采样率/位深度/声道数/比特率）
+        // 设置模式选择
         // ============================================================
+        var settingsMode by remember { mutableIntStateOf(1) } // 0=简单 1=基础 2=大师
+        Text("设置模式", fontSize = 12.sp, color = Color(0xFF888888))
+        Spacer(Modifier.height(4.dp))
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(0 to "简单", 1 to "基础", 2 to "大师").forEach { (idx, label) ->
+                FilterChip(
+                    selected = settingsMode == idx,
+                    onClick = { settingsMode = idx },
+                    label = { Text(label, fontSize = 12.sp) },
+                    modifier = Modifier.weight(1f),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black)
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            when (settingsMode) {
+                0 -> "仅基础引擎和权限配置"
+                1 -> "引擎 + 音频格式 + 缓冲设置"
+                else -> "全部参数 + 开发者选项"
+            }, fontSize = 10.sp, color = Color(0xFF666666)
+        )
+        Spacer(Modifier.height(12.dp))
+
+        // ============================================================
+        // 音频格式 — 基础模式及以上显示
+        // ============================================================
+        if (settingsMode >= 1) {
         Text("音频格式", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
 
@@ -1274,10 +1398,10 @@ fun SettingsPage(
             )
         }
 
-        Spacer(Modifier.height(20.dp))
+        }
 
         // ============================================================
-        // 音频方案（保留原有权限配置）
+        // 音频方案（所有模式都显示）
         // ============================================================
         Text("音频方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
@@ -1361,14 +1485,16 @@ fun SettingsPage(
         Spacer(Modifier.height(20.dp))
 
         // ============================================================
-        // 其他（开发者选项）
+        // 其他（开发者选项 — 大师模式及以上）
         // ============================================================
+        if (settingsMode >= 2) {
         Text("其他", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
         SettingsCard(icon = Icons.Default.DeveloperMode, title = "开发者选项", desc = "高级功能 · 谨慎操作") {
             onOpenDeveloperSettings()
         }
         Spacer(Modifier.height(40.dp)) // 底部留白
+        }
     }
 }
 
