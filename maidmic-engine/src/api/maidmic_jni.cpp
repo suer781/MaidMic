@@ -97,6 +97,9 @@ void process_audio_frame(int16_t* buffer, int frame_count, int sample_rate) {
          dsp_state.reverb_mix, dsp_state.pitch_semitones,
          dsp_state.formant_shift, dsp_state.distortion,
          dsp_state.echo_delay_ms, dsp_state.echo_decay);
+    if (frame_count > 0) {
+        LOGI("  before[0..3]=%d %d %d %d", buffer[0], buffer[1], buffer[2], buffer[3]);
+    }
 
     // --- Step 1: 增益 ---
     float gain_linear = db_to_linear(dsp_state.gain_db);
