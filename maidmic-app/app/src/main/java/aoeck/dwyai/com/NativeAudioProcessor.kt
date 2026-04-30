@@ -84,7 +84,7 @@ enum class AudioEngine(val key: String, val displayName: String, val description
 object NativeAudioProcessor {
 
     private var loaded = false
-    private var currentEngine: AudioEngine = AudioEngine.ECHIO_EQ
+    private var currentEngine: AudioEngine = AudioEngine.FREQ_CURVE
 
     /** 当前频响曲线预设索引 */
     var currentCurvePreset: Int = 0
@@ -103,8 +103,8 @@ object NativeAudioProcessor {
     }
 
     fun loadEngine(prefs: SharedPreferences) {
-        val saved = prefs.getString(KEY_ENGINE, AudioEngine.ECHIO_EQ.key) ?: AudioEngine.ECHIO_EQ.key
-        currentEngine = AudioEngine.entries.find { it.key == saved } ?: AudioEngine.ECHIO_EQ
+        val saved = prefs.getString(KEY_ENGINE, AudioEngine.FREQ_CURVE.key) ?: AudioEngine.FREQ_CURVE.key
+        currentEngine = AudioEngine.entries.find { it.key == saved } ?: AudioEngine.FREQ_CURVE
         currentCurvePreset = prefs.getInt(KEY_CURVE_PRESET, 0)
         AppLogger.i("Engine", "从存储恢复: ${currentEngine.key}, 曲线预设=$currentCurvePreset")
     }
