@@ -1382,15 +1382,19 @@ fun AboutPage(
             }
         }
 
-        // 应用图标（11次进开发者）
+        // 应用图标（11次切大师模式 = 显示开发者选项）
         Box(
             modifier = Modifier.size(80.dp).clip(CircleShape).background(Color(0xFFCE93D8))
                 .clickable {
                     devClickCount++
                     if (devClickCount >= 11) {
                         devClickCount = 0
-                        onOpenDeveloperSettings()
-                        Toast.makeText(context, "开发者模式已开启", Toast.LENGTH_SHORT).show()
+                        // 切到大师模式（设置页自动显示开发者选项）
+                        context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
+                            .edit().putInt("settings_mode", 2).apply()
+                        onOpenSettings()
+                        Toast.makeText(context, "大师模式已开启，设置页显示开发者选项", Toast.LENGTH_SHORT).show()
+                        AppLogger.i("Dev", "点击11次切换到大\\u5e08模式")
                     }
                 },
             contentAlignment = Alignment.Center
