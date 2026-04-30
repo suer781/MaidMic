@@ -12,6 +12,7 @@ package aoeck.dwyai.com.ui.settings.developer
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +22,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -28,6 +30,8 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import aoeck.dwyai.com.AppLogger
+import aoeck.dwyai.com.LogLevel
 
 // 用户必须逐字输入的声明文本
 // The exact text user must type to acknowledge
@@ -333,15 +337,184 @@ fun DeveloperSettingsPage(
         Spacer(modifier = Modifier.height(24.dp))
         
         // ============================================================
-        // 其他开发者选项预留
-        // Other developer options placeholder
+        // 应用内日志查看器
+        // In-app Log Viewer
         // ============================================================
-        Text(
-            text = if (isChinese) "更多开发者功能即将推出" else "More developer features coming soon",
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (isChinese) "📋 运行日志" else "📋 Runtime Log",
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // 日志级别过滤
+                    var logFilter by remember { mutableStateOf<LogLevel?>(null) }
+                    FilterChip(
+                        selected = logFilter == null,
+                        onClick = { logFilter = null },
+                        label = { Text("ALL", fontSize = 10.sp) },
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    FilterChip(
+                        selected = logFilter == LogLevel.ERROR,
+                        onClick = { logFilter = LogLevel.ERROR },
+                        label = { Text("ERROR", fontSize = 10.sp, color = Color.Red) },
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                    FilterChip(
+                        selected = logFilter == LogLevel.WARN,
+                        onClick = { logFilter = LogLevel.WARN },
+                        label = { Text("WARN", fontSize = 10.sp) }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 日志列表
+                val logs = remember { derivedStateOf {
+                    val all = AppLogger.getAll()
+                    if (logFilter == null) all else all.filter { it.level == logFilter }
+                } }
+
+                Surface(
+                    color = Color(0xFF0D0D0D),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth().height(200.dp)
+                ) {
+                    val scrollState = rememberScrollState()
+                    LaunchedEffect(logs.value.size) {
+                        scrollState.animateScrollTo(scrollState.maxValue)
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                            .padding(6.dp)
+                    ) {
+                        if (logs.value.isEmpty()) {
+                            Text(
+                                if (isChinese) "暂无日志" else "No logs",
+                                fontSize = 11.sp, color = Color(0xFF666666),
+                                modifier = Modifier.padding(4.dp)
+                            )
+                        } else {
+                            logs.value.forEach { entry ->
+                                Row(modifier = Modifier.fillMaxWidth()) {
+                                    Text(entry.formattedTime, fontSize = 9.sp,
+                                        color = Color(0xFF555555), fontFamily = FontFamily.Monospace)
+                                    Text(" ${entry.level.tag} ", fontSize = 9.sp,
+                                        color = when (entry.level) {
+                                            LogLevel.ERROR -> Color.Red
+                                            LogLevel.WARN -> Color(0xFFFFA726)
+                                            LogLevel.INFO -> Color(0xFF4CAF50)
+                                            LogLevel.DEBUG -> Color(0xFF888888)
+                                        },
+                                        fontFamily = FontFamily.Monospace)
+                                    Text("/${entry.tag}: ", fontSize = 9.sp,
+                                        color = Color(0xFF80CBC4), fontFamily = FontFamily.Monospace)
+                                    Text(entry.message, fontSize = 9.sp,
+                                        color = Color(0xFFCCCCCC), fontFamily = FontFamily.Monospace)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 按钮行
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { AppLogger.clear() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (isChinese) "清空日志" else "Clear", fontSize = 12.sp)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            AppLogger.i("Dev", "用户手动刷新日志")
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (isChinese) "刷新" else "Refresh", fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // ============================================================
+        // ADB 调试接口
+        // ADB Debugging Interface
+        // ============================================================
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = if (isChinese) "🔌 ADB 调试" else "🔌 ADB Debug",
+                    fontWeight = FontWeight.Medium
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val adbFilter = "MaidMic"
+                val pkgName = "aoeck.dwyai.com"
+
+                // 设备信息
+                InfoRow("型号", "${android.os.Build.MODEL}")
+                InfoRow("Android", "${android.os.Build.VERSION.RELEASE} (API ${android.os.Build.VERSION.SDK_INT})")
+                InfoRow("包名", pkgName)
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // ADB 命令
+                Text(
+                    if (isChinese) "常用 ADB 命令 (用于终端 / PC)：" else "Common ADB commands:",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                AdbCommand("adb logcat -s MaidMic/$adbFilter:* *:S")
+                AdbCommand("adb shell dumpsys package $pkgName")
+                AdbCommand("adb shell am start -n $pkgName/aoeck.dwyai.com.MainActivity")
+                AdbCommand("adb shell am force-stop $pkgName")
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    if (isChinese)
+                        "提示: 连接 PC 后在终端执行上述命令追踪日志\n" +
+                        "或使用 \"adb logcat -c\" 先清空旧日志"
+                    else
+                        "Tip: Run these commands on your PC after connecting via ADB.\n" +
+                        "Use 'adb logcat -c' to clear old logs first.",
+                    fontSize = 10.sp, color = Color(0xFF666666)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 测试日志按钮（方便生成日志确认系统工作）
+                OutlinedButton(
+                    onClick = {
+                        AppLogger.i("ADB", "ADB 调试接口 - 手动测试日志")
+                        AppLogger.d("ADB", "设备: ${android.os.Build.MODEL}")
+                        AppLogger.w("ADB", "这是一个 WARN 级别测试")
+                        AppLogger.e("ADB", "这是一个 ERROR 级别测试（模拟）")
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (isChinese) "生成测试日志" else "Generate test logs", fontSize = 12.sp)
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
     }
     
     // 免责声明弹窗
@@ -356,6 +529,37 @@ fun DeveloperSettingsPage(
                 showDisclaimer = false
                 // 用户取消了，保持关闭状态
             }
+        )
+    }
+}
+
+// ============================================================
+// 信息行组件（用于 ADB 调试卡）
+// ============================================================
+@Composable
+fun InfoRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text("$label: ", fontSize = 12.sp, color = Color(0xFF888888), modifier = Modifier.width(60.dp))
+        Text(value, fontSize = 12.sp, color = Color(0xFF80CBC4))
+    }
+}
+
+// ============================================================
+// ADB 命令展示组件（带等宽字体）
+// ============================================================
+@Composable
+fun AdbCommand(command: String) {
+    Surface(
+        color = Color(0xFF0D0D0D),
+        shape = RoundedCornerShape(4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+    ) {
+        Text(
+            command,
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            color = Color(0xFFCE93D8),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
         )
     }
 }
