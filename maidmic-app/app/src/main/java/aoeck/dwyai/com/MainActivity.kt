@@ -1574,6 +1574,13 @@ private fun startVoiceTest(
     val totalSamples = sampleRate * durationSec
     val allPcm = mutableListOf<ByteArray>()
 
+    // API 兼容性检查
+    val apiLevel = Build.VERSION.SDK_INT
+    AppLogger.i("Test", "API level=$apiLevel, sampleRate=$sampleRate, bufferSize=$bufferSize")
+
+    // 不同 Android 版本使用不同的 AudioRecord 构建方式
+    val useNewBuilder = apiLevel >= 23 // AudioRecord.Builder 从 API 23 可用
+
     // 先检查权限
     val hasMic = ContextCompat.checkSelfPermission(context,
         Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
