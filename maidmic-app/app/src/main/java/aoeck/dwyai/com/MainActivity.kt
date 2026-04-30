@@ -1144,34 +1144,15 @@ fun SettingsPage(
 ) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
-    val audioPrefs = context.getSharedPreferences("maidmic_audio_params", Context.MODE_PRIVATE)
-
-    // === 音频格式参数 ===
-    var sampleRate by remember { mutableIntStateOf(audioPrefs.getInt("sample_rate", 48000)) }
-    var bitDepth by remember { mutableIntStateOf(audioPrefs.getInt("bit_depth", 16)) }
-    var channels by remember { mutableIntStateOf(audioPrefs.getInt("channels", 2)) }
-    var bitrate by remember { mutableIntStateOf(audioPrefs.getInt("bitrate", 192)) }
-    var encoderMode by remember { mutableIntStateOf(audioPrefs.getInt("encoder_mode", 0)) }
-
-    // === 缓冲与处理参数 ===
-    var bufferSize by remember { mutableIntStateOf(audioPrefs.getInt("buffer_size", 256)) }
-    var frameSize by remember { mutableIntStateOf(audioPrefs.getInt("frame_size", 1024)) }
-    var overlapRatio by remember { mutableIntStateOf(audioPrefs.getInt("overlap_ratio", 50)) }
 
     // === 引擎 ===
     var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
 
-    fun saveAudioParams() {
-        audioPrefs.edit()
-            .putInt("sample_rate", sampleRate)
-            .putInt("bit_depth", bitDepth)
-            .putInt("channels", channels)
-            .putInt("bitrate", bitrate)
-            .putInt("encoder_mode", encoderMode)
-            .putInt("buffer_size", bufferSize)
-            .putInt("frame_size", frameSize)
-            .putInt("overlap_ratio", overlapRatio)
-            .apply()
+    // === 设置模式（持久化到 prefs）===
+    var settingsMode by remember { mutableIntStateOf(prefs.getInt("settings_mode", 1)) }
+    fun saveMode(mode: Int) {
+        settingsMode = mode
+        prefs.edit().putInt("settings_mode", mode).apply()
     }
 
     Column(
@@ -1189,16 +1170,16 @@ fun SettingsPage(
         Spacer(Modifier.height(16.dp))
 
         // ============================================================
-        // 设置模式选择
+        // 设置模式选择（持久化，影响首页复杂度）
         // ============================================================
-        var settingsMode by remember { mutableIntStateOf(1) } // 0=简单 1=基础 2=大师
-        Text("设置模式", fontSize = 12.sp, color = Color(0xFF888888))
+        var sm by remember { mutableIntStateOf(settingsMode) }
+        Text("首页模式", fontSize = 12.sp, color = Color(0xFF888888))
         Spacer(Modifier.height(4.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(0 to "简单", 1 to "基础", 2 to "大师").forEach { (idx, label) ->
                 FilterChip(
-                    selected = settingsMode == idx,
-                    onClick = { settingsMode = idx },
+                    selected = sm == idx,
+                    onClick = { sm = idx; saveMode(idx) },
                     label = { Text(label, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
@@ -1208,197 +1189,13 @@ fun SettingsPage(
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            when (settingsMode) {
-                0 -> "仅基础引擎和权限配置"
-                1 -> "引擎 + 音频格式 + 缓冲设置"
-                else -> "全部参数 + 开发者选项"
+            when (sm) {
+                0 -> "仅基础控制，适合快速使用"
+                1 -> "完整EQ/效果/音频参数"
+                else -> "全部功能+开发者选项"
             }, fontSize = 10.sp, color = Color(0xFF666666)
         )
-        Spacer(Modifier.height(12.dp))
-
-        // ============================================================
-        // 音频格式 — 基础模式及以上显示
-        // ============================================================
-        if (settingsMode >= 1) {
-        Text("音频格式", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-        Spacer(Modifier.height(8.dp))
-
-        // 采样率
-        AudioParamRow(label = "采样率", value = when(sampleRate) {
-            44100 -> "44.1 kHz"
-            48000 -> "48 kHz"
-            96000 -> "96 kHz"
-            else -> "${sampleRate/1000} kHz"
-        }) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                listOf(44100, 48000, 96000).forEach { rate ->
-                    FilterChip(
-                        selected = sampleRate == rate,
-                        onClick = { sampleRate = rate; saveAudioParams() },
-                        label = { Text("${rate/1000}k", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
-        }
-
-        // 位深度
-        AudioParamRow(label = "位深度", value = when(bitDepth) {
-            16 -> "16-bit Int"
-            24 -> "24-bit Int"
-            32 -> "32-bit Float"
-            else -> "$bitDepth-bit"
-        }) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(16 to "16bit", 24 to "24bit", 32 to "32 Float").forEach { (depth, lbl) ->
-                    FilterChip(
-                        selected = bitDepth == depth,
-                        onClick = { bitDepth = depth; saveAudioParams() },
-                        label = { Text(lbl, fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
-        }
-
-        // 声道数
-        AudioParamRow(label = "声道数", value = if (channels == 1) "单声道" else "立体声") {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(1 to "单声道", 2 to "立体声").forEach { (cnt, lbl) ->
-                    FilterChip(
-                        selected = channels == cnt,
-                        onClick = { channels = cnt; saveAudioParams() },
-                        label = { Text(lbl, fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
-        }
-
-        // 比特率
-        AudioParamRow(label = "比特率", value = "${bitrate} kbps") {
-            Slider(
-                value = bitrate.toFloat(),
-                onValueChange = { bitrate = it.toInt(); saveAudioParams() },
-                valueRange = 64f..320f, steps = 15,
-                modifier = Modifier.fillMaxWidth(),
-                colors = SliderDefaults.colors(thumbColor = Color(0xFFCE93D8), activeTrackColor = Color(0xFFCE93D8))
-            )
-        }
-
         Spacer(Modifier.height(16.dp))
-
-        // ============================================================
-        // 缓冲与处理（缓冲区/帧长度/重叠率）
-        // ============================================================
-        Text("缓冲与处理", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-        Spacer(Modifier.height(8.dp))
-
-        // 缓冲区大小
-        val bufLatencyMs = bufferSize * 1000 / sampleRate
-        AudioParamRow(label = "缓冲区大小", value = "${bufferSize} 样本 (~${bufLatencyMs}ms)") {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                listOf(64, 128, 256, 512, 1024).forEach { size ->
-                    FilterChip(
-                        selected = bufferSize == size,
-                        onClick = { bufferSize = size; saveAudioParams() },
-                        label = { Text("$size", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
-        }
-
-        // 帧长度/窗长
-        AudioParamRow(label = "帧长度 (窗长)", value = "$frameSize 点") {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                listOf(256, 512, 1024, 2048).forEach { size ->
-                    FilterChip(
-                        selected = frameSize == size,
-                        onClick = { frameSize = size; saveAudioParams() },
-                        label = { Text("$size", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
-            Spacer(Modifier.height(2.dp))
-            Text(
-                when (frameSize) {
-                    256 -> "高时间分辨率，适合快速变化信号"
-                    512 -> "均衡时频分辨率"
-                    1024 -> "标准 FFT 窗，频率精度好"
-                    else -> "高频率分辨率，适合稳态信号"
-                }, fontSize = 10.sp, color = Color(0xFF666666)
-            )
-        }
-
-        // 重叠率 + 帧移联动显示
-        AudioParamRow(label = "重叠率", value = "$overlapRatio%") {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(0, 25, 50, 75).forEach { ratio ->
-                    FilterChip(
-                        selected = overlapRatio == ratio,
-                        onClick = { overlapRatio = ratio; saveAudioParams() },
-                        label = { Text("$ratio%", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
-        }
-
-        // 帧移（只读，自动计算）
-        val hopSize = (frameSize * (100 - overlapRatio) / 100).coerceAtLeast(1)
-        AudioParamRow(label = "帧移 (Hop Size)", value = "$hopSize 点（自动）") {
-            Text("← 由帧长度与重叠率决定", fontSize = 10.sp, color = Color(0xFF555555))
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // ============================================================
-        // 编码选项（CBR/VBR/ABR）
-        // ============================================================
-        Text("编码选项", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
-        Spacer(Modifier.height(8.dp))
-
-        AudioParamRow(
-            label = "码率控制",
-            value = when (encoderMode) { 0 -> "CBR 固定"; 1 -> "VBR 可变"; else -> "ABR 平均" }
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(0 to "CBR", 1 to "VBR", 2 to "ABR").forEach { (idx, lbl) ->
-                    FilterChip(
-                        selected = encoderMode == idx,
-                        onClick = { encoderMode = idx; saveAudioParams() },
-                        label = { Text(lbl, fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
-                        )
-                    )
-                }
-            }
-            Spacer(Modifier.height(2.dp))
-            Text(
-                when (encoderMode) {
-                    0 -> "固定比特率，文件大小可控"
-                    1 -> "可变比特率，空间效率高"
-                    else -> "平均比特率，折中方案"
-                }, fontSize = 10.sp, color = Color(0xFF666666)
-            )
-        }
-
-        }
 
         // ============================================================
         // 音频方案（所有模式都显示）
@@ -1429,7 +1226,7 @@ fun SettingsPage(
         Spacer(Modifier.height(20.dp))
 
         // ============================================================
-        // 音频引擎（保留）
+        // 音频引擎（所有模式都显示）
         // ============================================================
         Text("音频引擎", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
@@ -1485,15 +1282,15 @@ fun SettingsPage(
         Spacer(Modifier.height(20.dp))
 
         // ============================================================
-        // 其他（开发者选项 — 大师模式及以上）
+        // 其他（开发者选项 — 大师模式）
         // ============================================================
-        if (settingsMode >= 2) {
+        if (sm >= 2) {
         Text("其他", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
         SettingsCard(icon = Icons.Default.DeveloperMode, title = "开发者选项", desc = "高级功能 · 谨慎操作") {
             onOpenDeveloperSettings()
         }
-        Spacer(Modifier.height(40.dp)) // 底部留白
+        Spacer(Modifier.height(40.dp))
         }
     }
 }
