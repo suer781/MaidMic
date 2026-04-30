@@ -92,6 +92,12 @@ void set_eq_params(float gain_db, float bass_db, float treble_db,
 void process_audio_frame(int16_t* buffer, int frame_count, int sample_rate) {
     if (!buffer || frame_count <= 0) return;
 
+    LOGI("process_audio_frame: gain=%.1f bass=%.1f treble=%.1f reverb=%.2f pitch=%d formant=%.1f distortion=%.2f echo=%.0fms decay=%.2f",
+         dsp_state.gain_db, dsp_state.bass_db, dsp_state.treble_db,
+         dsp_state.reverb_mix, dsp_state.pitch_semitones,
+         dsp_state.formant_shift, dsp_state.distortion,
+         dsp_state.echo_delay_ms, dsp_state.echo_decay);
+
     // --- Step 1: 增益 ---
     float gain_linear = db_to_linear(dsp_state.gain_db);
     if (fabsf(gain_linear - 1.0f) > 0.001f) {
