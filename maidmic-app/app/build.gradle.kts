@@ -39,9 +39,21 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    // 固定 debug keystore（避免每次 CI 签名不同导致需要卸载重装）
+    signingConfigs {
+        create("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "maidmic_debug"
+            keyPassword = "android"
         }
     }
 
