@@ -32,6 +32,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import aoeck.dwyai.com.AppLogger
 import aoeck.dwyai.com.LogLevel
+import aoeck.dwyai.com.NativeAudioProcessor
+import aoeck.dwyai.com.EngineHealth
 
 // 用户必须逐字输入的声明文本
 // The exact text user must type to acknowledge
@@ -500,6 +502,40 @@ fun DeveloperSettingsPage(
                         "Use 'adb logcat -c' to clear old logs first.",
                     fontSize = 10.sp, color = Color(0xFF666666)
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 引擎健康状态
+                val health = NativeAudioProcessor.getHealth()
+                val healthText = when (health) {
+                    aoeck.dwyai.com.EngineHealth.OK -> "✓ JNI 引擎正常"
+                    aoeck.dwyai.com.EngineHealth.FALLBACK -> "⚠ Kotlin 降级模式"
+                    aoeck.dwyai.com.EngineHealth.BROKEN -> "✗ 引擎不可用"
+                }
+                InfoRow("引擎状态", healthText)
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 引擎自检按钮
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            val ok = NativeAudioProcessor.selfTest()
+                            val msg = if (ok) "✓ 自检通过" else "✗ 自检失败"
+                            AppLogger.i("Dev", msg)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("引擎自检", fontSize = 12.sp) }
+
+                    OutlinedButton(
+                        onClick = {
+                            NativeAudioProcessor.resetEngine()
+                            NativeAudioProcessor.ensureLoaded()
+                            AppLogger.i("Dev", "引擎已重置并重新加载")
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("重置引擎", fontSize = 12.sp) }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
