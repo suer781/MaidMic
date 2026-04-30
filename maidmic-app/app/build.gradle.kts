@@ -32,6 +32,16 @@ android {
         }
     }
 
+    // 固定 keystore（避免每次 CI 签名不同导致需要卸载重装）
+    signingConfigs {
+        create("fixedDebug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "maidmic_debug"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -39,21 +49,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("fixedDebug")
         }
         debug {
             isDebuggable = true
-            signingConfig = signingConfigs.getByName("debug")
-        }
-    }
-
-    // 固定 debug keystore（避免每次 CI 签名不同导致需要卸载重装）
-    signingConfigs {
-        create("debug") {
-            storeFile = file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "maidmic_debug"
-            keyPassword = "android"
+            signingConfig = signingConfigs.getByName("fixedDebug")
         }
     }
 
