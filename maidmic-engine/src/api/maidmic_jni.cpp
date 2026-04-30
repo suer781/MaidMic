@@ -163,11 +163,16 @@ void process_audio_frame(int16_t* buffer, int frame_count, int sample_rate) {
     if (dsp_state.pitch_semitones != 0) {
         // 半音转频率比: 2^(n/12)
         float pitch_ratio = powf(2.0f, dsp_state.pitch_semitones / 12.0f);
+        // pitch > 0 (升调): ratio>1, out_count < frame_count → 下采样
+        // pitch < 0 (降调): ratio<1, out_count > frame_count → 上采样
+        int needed = (int)ceilf(frame_count * fmaxf(pitch_ratio, 1.0f));
         int out_count = (int)(frame_count / pitch_ratio);
+        if (out_count > needed) out_count = needed;
 
-        if (out_count > 0 && out_count <= frame_count) {
+        if (out_count > 0) {
             int16_t* temp = new int16_t[frame_count];
             memcpy(temp, buffer, frame_count * sizeof(int16_t));
+            int16_t* out_buf = (out_count > frame_count) ? new int16_t[out_count] : buffer;
 
             for (int i = 0; i < out_count; i++) {
                 float src_pos = i * pitch_ratio;
@@ -176,16 +181,24 @@ void process_audio_frame(int16_t* buffer, int frame_count, int sample_rate) {
 
                 if (src_idx + 1 < frame_count) {
                     // 线性插值
-                    buffer[i] = (int16_t)clamp(
+                    out_buf[i] = (int16_t)clamp(
                         temp[src_idx] * (1.0f - frac) + temp[src_idx + 1] * frac,
                         -32768.0f, 32767.0f);
                 } else if (src_idx < frame_count) {
-                    buffer[i] = temp[src_idx];
+                    out_buf[i] = temp[src_idx];
+                } else {
+                    out_buf[i] = 0;
                 }
             }
-            // 填充剩余
-            for (int i = out_count; i < frame_count; i++) {
-                buffer[i] = 0;
+            // 如果 out_count > frame_count，需要额外分配
+            if (out_buf != buffer) {
+                memcpy(buffer, out_buf, out_count * sizeof(int16_t));
+                delete[] out_buf;
+            } else {
+                // 填充剩余（仅对降采样）
+                for (int i = out_count; i < frame_count; i++) {
+                    buffer[i] = 0;
+                }
             }
             delete[] temp;
         }
@@ -355,16 +368,18 @@ static inline float biquad_process(float sample, const float b[3], const float a
 // 通过级联 Biquad 滤波器处理一个样本（主 EQ）
 static inline float fc_process_sample(float sample) {
     float y = sample;
-    // 前级预渲染（pre-render）
-    for (int i = 0; i < FC_BAND_COUNT && fc_state.pre_render[i] != 0.0f; i++) {
+    // 前级预渲染（pre-render）— 处理所有频段
+    for (int i = 0; i < FC_BAND_COUNT; i++) {
+        if (fc_state.pre_render[i] == 0.0f) continue; // 跳过零增益但继续下一段
         float b[3], a[3];
         calc_biquad_peaking(fc_state.freqs[i], fc_state.pre_render[i],
                             0.707f, (float)fc_state.sample_rate, b, a);
         // 使用独立的状态数组
         y = biquad_process(y, b, a, fc_state.pre_biquad_state[i]);
     }
-    // 主 EQ
-    for (int i = 0; i < FC_BAND_COUNT && fc_state.bands[i] != 0.0f; i++) {
+    // 主 EQ — 处理所有频段
+    for (int i = 0; i < FC_BAND_COUNT; i++) {
+        if (fc_state.bands[i] == 0.0f) continue; // 跳过零增益但继续下一段
         if (!fc_state.coeffs_valid) fc_update_coeffs();
         y = biquad_process(y, fc_state.b_coeffs[i], fc_state.a_coeffs[i],
                            fc_state.biquad_state[i]);
@@ -420,26 +435,36 @@ void process_freq_curve_frame(int16_t* buffer, int frame_count) {
         }
     }
     
-    // 变调（复用主 DSP 逻辑）
+    // 变调（修复降调时 out_count > frame_count 被跳过的问题）
     if (dsp_state.pitch_semitones != 0) {
         float pitch_ratio = powf(2.0f, dsp_state.pitch_semitones / 12.0f);
+        int needed = (int)ceilf(frame_count * fmaxf(pitch_ratio, 1.0f));
         int out_count = (int)(frame_count / pitch_ratio);
-        if (out_count > 0 && out_count <= frame_count) {
+        if (out_count > needed) out_count = needed;
+        if (out_count > 0) {
             int16_t* temp = new int16_t[frame_count];
             memcpy(temp, buffer, frame_count * sizeof(int16_t));
+            int16_t* out_buf = (out_count > frame_count) ? new int16_t[out_count] : buffer;
             for (int i = 0; i < out_count; i++) {
                 float src_pos = i * pitch_ratio;
                 int src_idx = (int)src_pos;
                 float frac = src_pos - src_idx;
                 if (src_idx + 1 < frame_count) {
-                    buffer[i] = (int16_t)clamp(
+                    out_buf[i] = (int16_t)clamp(
                         temp[src_idx] * (1.0f - frac) + temp[src_idx + 1] * frac,
                         -32768.0f, 32767.0f);
                 } else if (src_idx < frame_count) {
-                    buffer[i] = temp[src_idx];
+                    out_buf[i] = temp[src_idx];
+                } else {
+                    out_buf[i] = 0;
                 }
             }
-            for (int i = out_count; i < frame_count; i++) buffer[i] = 0;
+            if (out_buf != buffer) {
+                memcpy(buffer, out_buf, out_count * sizeof(int16_t));
+                delete[] out_buf;
+            } else {
+                for (int i = out_count; i < frame_count; i++) buffer[i] = 0;
+            }
             delete[] temp;
         }
     }
