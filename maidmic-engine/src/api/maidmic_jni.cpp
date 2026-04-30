@@ -22,7 +22,7 @@ extern "C" {
 // ============================================================
 
 static struct {
-    float gain_db;        // 增益 dB (-10 ~ 10)
+    float gain_db;        // 增益 dB (-30 ~ 30)
     float bass_db;        // 低音 dB (-10 ~ 10)
     float treble_db;      // 高音 dB (-10 ~ 10)
     float reverb_mix;     // 混响混合比 (0 ~ 1)
