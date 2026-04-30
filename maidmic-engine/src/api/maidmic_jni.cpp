@@ -294,16 +294,21 @@ static struct {
     float b_coeffs[FC_BAND_COUNT][3];  // b0, b1, b2
     float a_coeffs[FC_BAND_COUNT][3];  // a1, a2 (a0 归一化为 1)
     
+    // 前级预渲染系数缓存
+    float pre_b_coeffs[FC_BAND_COUNT][3];
+    float pre_a_coeffs[FC_BAND_COUNT][3];
+    
     // 是否已初始化系数
     bool coeffs_valid;
+    bool pre_coeffs_valid;
     
     // 当前采样率
     int sample_rate;
 } fc_state = {
     {0}, {0},
     {31.0f, 62.0f, 125.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f, 16000.0f},
-    {{0}}, {{0}}, {{0}}, {{0}},
-    false, 48000
+    {{0}}, {{0}}, {{0}}, {{0}}, {{0}}, {{0}},
+    false, false, 48000
 };
 
 // Biquad Peaking Filter 系数计算
@@ -349,8 +354,18 @@ static void fc_update_coeffs() {
             fc_state.b_coeffs[i],
             fc_state.a_coeffs[i]
         );
+        // 同时计算前级预渲染系数
+        calc_biquad_peaking(
+            fc_state.freqs[i],
+            fc_state.pre_render[i],
+            0.707f,
+            (float)fc_state.sample_rate,
+            fc_state.pre_b_coeffs[i],
+            fc_state.pre_a_coeffs[i]
+        );
     }
     fc_state.coeffs_valid = true;
+    fc_state.pre_coeffs_valid = true;
 }
 
 // 通过 Biquad 滤波器处理单个样本
@@ -368,19 +383,17 @@ static inline float biquad_process(float sample, const float b[3], const float a
 // 通过级联 Biquad 滤波器处理一个样本（主 EQ）
 static inline float fc_process_sample(float sample) {
     float y = sample;
-    // 前级预渲染（pre-render）— 处理所有频段
+    // 前级预渲染（pre-render）— 使用缓存系数
+    if (!fc_state.pre_coeffs_valid) fc_update_coeffs();
     for (int i = 0; i < FC_BAND_COUNT; i++) {
-        if (fc_state.pre_render[i] == 0.0f) continue; // 跳过零增益但继续下一段
-        float b[3], a[3];
-        calc_biquad_peaking(fc_state.freqs[i], fc_state.pre_render[i],
-                            0.707f, (float)fc_state.sample_rate, b, a);
-        // 使用独立的状态数组
-        y = biquad_process(y, b, a, fc_state.pre_biquad_state[i]);
+        if (fc_state.pre_render[i] == 0.0f) continue;
+        y = biquad_process(y, fc_state.pre_b_coeffs[i], fc_state.pre_a_coeffs[i],
+                           fc_state.pre_biquad_state[i]);
     }
     // 主 EQ — 处理所有频段
+    if (!fc_state.coeffs_valid) fc_update_coeffs();
     for (int i = 0; i < FC_BAND_COUNT; i++) {
-        if (fc_state.bands[i] == 0.0f) continue; // 跳过零增益但继续下一段
-        if (!fc_state.coeffs_valid) fc_update_coeffs();
+        if (fc_state.bands[i] == 0.0f) continue;
         y = biquad_process(y, fc_state.b_coeffs[i], fc_state.a_coeffs[i],
                            fc_state.biquad_state[i]);
     }
@@ -404,6 +417,7 @@ void set_freq_curve_params(const float* bands, const float* pre_render, int samp
     }
     fc_state.sample_rate = sample_rate;
     fc_state.coeffs_valid = false;  // 强制重新计算
+    fc_state.pre_coeffs_valid = false;
     fc_update_coeffs();
 }
 
