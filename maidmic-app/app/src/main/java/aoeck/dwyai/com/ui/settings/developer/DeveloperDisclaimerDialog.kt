@@ -345,14 +345,15 @@ fun DeveloperSettingsPage(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
+                // 日志级别过滤（提到Column作用域，供内部所有组件访问）
+                var logFilter by remember { mutableStateOf<LogLevel?>(null) }
+
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = if (isChinese) "📋 运行日志" else "📋 Runtime Log",
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.weight(1f)
                     )
-                    // 日志级别过滤
-                    var logFilter by remember { mutableStateOf<LogLevel?>(null) }
                     FilterChip(
                         selected = logFilter == null,
                         onClick = { logFilter = null },
