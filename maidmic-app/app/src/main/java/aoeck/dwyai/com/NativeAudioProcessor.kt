@@ -101,13 +101,25 @@ object NativeAudioProcessor {
                 input[i * 2 + 1] = ((sample.toInt() shr 8) and 0xFF).toByte()
             }
 
-            // 先设一个非零参数确保引擎会处理
+            // 保存原引擎，临时切到 ECHIO_EQ 并设非零参数
+            val savedEngine = currentEngine
+            val savedCurve = currentCurvePreset
             if (loaded) {
+                // 设一个明显非零参数确保引擎会处理
                 nativeSetEqParams(5f, 0f, 0f, 0f, 0, 0f, 0f, 0f, 0f)
+                // 也设频响曲线为非零
+                val testBands = floatArrayOf(5f, 5f, 5f, 5f, 5f, 5f, 5f, 5f, 5f, 5f)
+                nativeSetFreqCurve(testBands, null, 48000)
             }
 
             val output = ByteArray(sampleCount * 2)
             processAudio(input, output, sampleCount * 2)
+
+            // 恢复引擎状态
+            if (loaded && savedEngine == AudioEngine.FREQ_CURVE) {
+                setCurvePreset(savedCurve)
+            }
+            currentEngine = savedEngine
 
             // 验证输出和输入不同（引擎确实修改了音频）
             var diff = 0
@@ -119,6 +131,7 @@ object NativeAudioProcessor {
             passed
         } catch (e: Exception) {
             AppLogger.e("SelfTest", "自检异常", e)
+            // 确保恢复引擎状态
             false
         }
     }
