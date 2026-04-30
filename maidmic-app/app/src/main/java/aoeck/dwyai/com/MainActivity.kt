@@ -912,7 +912,37 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                 }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
+
+        // ============================================================
+        // AEC 开关 + 压缩机
+        // ============================================================
+        var aecOn by remember { mutableStateOf(true) }
+        var compThreshold by remember { mutableFloatStateOf(-20f) }
+        var compRatio by remember { mutableFloatStateOf(4f) }
+        var compMakeup by remember { mutableFloatStateOf(6f) }
+
+        Surface(color = Color(0xFF2A2930), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("回声消除 (AEC)", fontSize = 12.sp, color = Color.White, modifier = Modifier.weight(1f))
+                    Switch(checked = aecOn, onCheckedChange = {
+                        aecOn = it; AudioLoopback.setAecEnabled(it)
+                        AppLogger.i("AEC", "AEC ${if(it) \"开启\" else \"关闭\"}")
+                    }, modifier = Modifier.height(20.dp),
+                    colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8)))
+                }
+                // 压缩机
+                Text("压缩机 (炸麦)", fontSize = 12.sp, color = Color(0xFF888888))
+                EqSlider("阈值", compThreshold, -60f..0f) { compThreshold = it
+                    NativeAudioProcessor.setCompressor(compThreshold, compRatio, compMakeup) }
+                EqSlider("压缩比", compRatio, 1f..20f) { compRatio = it
+                    NativeAudioProcessor.setCompressor(compThreshold, compRatio, compMakeup) }
+                EqSlider("补偿增益", compMakeup, 0f..20f) { compMakeup = it
+                    NativeAudioProcessor.setCompressor(compThreshold, compRatio, compMakeup) }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
 
         // ============================================================
         // 测试变声按钮（仅用于效果验证，建议戴耳机）
