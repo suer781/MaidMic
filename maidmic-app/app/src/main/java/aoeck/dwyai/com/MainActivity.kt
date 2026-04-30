@@ -398,12 +398,33 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
             Text("选择虚拟麦克风方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFCCCCCC))
             Spacer(Modifier.height(12.dp))
 
-            // 三种方案（可点击跳转配置）
-            MicModeCard("方案A: Root AudioFlinger", "需 root 权限", Icons.Default.Lock) {
-                Toast.makeText(context, "Root 模式需要 ROOT 权限", Toast.LENGTH_SHORT).show()
+            // Root 状态检测（异步）
+            var rootStatus by remember { mutableStateOf<RootMicBridge.RootStatus?>(null) }
+            LaunchedEffect(Unit) {
+                rootStatus = RootMicBridge(context).checkRoot()
+                AppLogger.i("Onboarding", "Root检测: granted=${rootStatus?.granted} ver=${rootStatus?.magiskVer}")
+            }
+
+            // 方案A: Root（显示实际 root 状态）
+            MicModeCard(
+                "方案A: Root AudioFlinger",
+                if (rootStatus == null) "检测中..."
+                else if (rootStatus!!.granted) "✓ Root 已授权 (${rootStatus!!.magiskVer})"
+                else "✗ 未检测到 root",
+                if (rootStatus?.granted == true) Icons.Default.CheckCircle else Icons.Default.Lock
+            ) {
+                if (rootStatus?.granted == true) {
+                    val bridge = RootMicBridge(context)
+                    bridge.start()
+                    Toast.makeText(context, "Root 模式已启动", Toast.LENGTH_SHORT).show()
+                    AppLogger.i("Root", "启动 Root 音频环回")
+                } else {
+                    Toast.makeText(context, "本机无 root 权限", Toast.LENGTH_SHORT).show()
+                }
             }
             Spacer(Modifier.height(8.dp))
-            // Shizuku 方案（带授权状态反馈）
+
+            // 方案B: Shizuku（带授权状态反馈）
             MicModeCard(
                 "方案B: Shizuku AAudio",
                 if (shizukuChecked) {
@@ -422,7 +443,9 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(8.dp))
-            MicModeCard("方案C: 无障碍服务", "最兼容", Icons.Default.Visibility) {
+
+            // 方案C: 无障碍服务
+            MicModeCard("方案C: 无障碍服务", "最兼容 · 无需额外权限", Icons.Default.Visibility) {
                 context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
 
