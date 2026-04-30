@@ -664,6 +664,27 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             }
         }
 
+        // ============================================================
+        // 权限状态指示（自动检测 root/shizuku）
+        // ============================================================
+        var rootStat by remember { mutableStateOf<RootMicBridge.RootStatus?>(null) }
+        LaunchedEffect(Unit) { rootStat = RootMicBridge(context).checkRoot() }
+        val shizukuAvail = remember { checkShizukuStatus() }
+        Surface(color = Color(0xFF1E1E1E), shape = RoundedCornerShape(6.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                val (icon, label, color) = when {
+                    rootStat?.granted == true -> Triple(Icons.Default.CheckCircle, "Root 可用", Color(0xFF4CAF50))
+                    shizukuAvail -> Triple(Icons.Default.Security, "Shizuku 可用", Color(0xFF80CBC4))
+                    else -> Triple(Icons.Default.Info, "无特权 · 仅测试模式", Color(0xFF888888))
+                }
+                Icon(icon, null, tint = color, modifier = Modifier.size(12.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(label, fontSize = 10.sp, color = color)
+                Spacer(Modifier.weight(1f))
+                Text("建议戴耳机使用", fontSize = 9.sp, color = Color(0xFF555555))
+            }
+        }
+
         Spacer(Modifier.height(6.dp))
 
         // ============================================================
@@ -801,7 +822,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                 Spacer(Modifier.height(14.dp))
 
                 // 快速滑块（紧凑）
-                EqSlider("增益", gain, -10f..10f) { gain = it; save() }
+                EqSlider("增益", gain, -30f..30f) { gain = it; save() }
                 EqSlider("低音", bass, -10f..10f) { bass = it; save() }
                 EqSlider("高音", treble, -10f..10f) { treble = it; save() }
 
