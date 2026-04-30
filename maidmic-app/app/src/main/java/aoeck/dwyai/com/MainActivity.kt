@@ -417,10 +417,11 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
             Text("选择虚拟麦克风方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFCCCCCC))
             Spacer(Modifier.height(12.dp))
 
-            // Root 状态检测（异步）
+            // Root 状态检测（异步）- 使用 remember 保持同一实例
+            val rootBridge = remember { RootMicBridge(context) }
             var rootStatus by remember { mutableStateOf<RootMicBridge.RootStatus?>(null) }
             LaunchedEffect(Unit) {
-                rootStatus = RootMicBridge(context).checkRoot()
+                rootStatus = rootBridge.checkRoot()
                 AppLogger.i("Onboarding", "Root检测: granted=${rootStatus?.granted} ver=${rootStatus?.magiskVer}")
             }
 
@@ -433,8 +434,7 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
                 if (rootStatus?.granted == true) Icons.Default.CheckCircle else Icons.Default.Lock
             ) {
                 if (rootStatus?.granted == true) {
-                    val bridge = RootMicBridge(context)
-                    bridge.start()
+                    rootBridge.start()
                     Toast.makeText(context, "Root 模式已启动", Toast.LENGTH_SHORT).show()
                     AppLogger.i("Root", "启动 Root 音频环回")
                 } else {
@@ -591,7 +591,10 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             .putFloat("echo_delay", echoDelay).putFloat("echo_decay", echoDecay)
             .apply()
         NativeAudioProcessor.ensureLoaded()
-        if (bypass) return
+        if (bypass) {
+            AppLogger.d("EqPage", "save: 旁路中，跳过引擎推送")
+            return
+        }
         NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch,
             formant, distortion, echoDelay, echoDecay)
     }
@@ -721,6 +724,10 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                             NativeAudioProcessor.setEngine(AudioEngine.PASSTHROUGH)
                         } else {
                             NativeAudioProcessor.setEngine(currentEngine)
+                            // 关旁路时重新发参数（旁路期间改的滑块值要推给引擎）
+                            NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch,
+                                formant, distortion, echoDelay, echoDecay)
+                            AppLogger.i("EqPage", "旁路关闭，参数已重新推送")
                         }
                     },
                     modifier = Modifier.height(24.dp),
