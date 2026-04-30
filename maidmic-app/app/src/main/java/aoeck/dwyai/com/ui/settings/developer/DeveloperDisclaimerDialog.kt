@@ -405,9 +405,9 @@ fun DeveloperSettingsPage(
                         } else {
                             logs.value.forEach { entry ->
                                 Row(modifier = Modifier.fillMaxWidth()) {
-                                    Text(entry.formattedTime, fontSize = 9.sp,
+                                    Text(entry.formattedTime, fontSize = 8.sp,
                                         color = Color(0xFF555555), fontFamily = FontFamily.Monospace)
-                                    Text(" ${entry.level.tag} ", fontSize = 9.sp,
+                                    Text(" ${entry.level.tag} ", fontSize = 8.sp,
                                         color = when (entry.level) {
                                             LogLevel.ERROR -> Color.Red
                                             LogLevel.WARN -> Color(0xFFFFA726)
@@ -415,10 +415,13 @@ fun DeveloperSettingsPage(
                                             LogLevel.DEBUG -> Color(0xFF888888)
                                         },
                                         fontFamily = FontFamily.Monospace)
-                                    Text("/${entry.tag}: ", fontSize = 9.sp,
+                                    Text("${entry.thread.takeLast(12).padStart(12)} ", fontSize = 7.sp,
+                                        color = Color(0xFF555555), fontFamily = FontFamily.Monospace)
+                                    Text("/${entry.tag}: ", fontSize = 8.sp,
                                         color = Color(0xFF80CBC4), fontFamily = FontFamily.Monospace)
-                                    Text(entry.message, fontSize = 9.sp,
-                                        color = Color(0xFFCCCCCC), fontFamily = FontFamily.Monospace)
+                                    Text(entry.message, fontSize = 8.sp,
+                                        color = Color(0xFFCCCCCC), fontFamily = FontFamily.Monospace,
+                                        maxLines = 1)
                                 }
                             }
                         }
