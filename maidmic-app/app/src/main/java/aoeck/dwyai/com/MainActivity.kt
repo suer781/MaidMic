@@ -561,7 +561,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
     val appPrefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
 
     // 首页模式（读取设置页保存的值）
-    val eqMode = remember { mutableIntStateOf(appPrefs.getInt("settings_mode", 1)) }
+    var eqMode by remember { mutableIntStateOf(appPrefs.getInt("settings_mode", 1)) }
 
     var selectedPreset by remember { mutableIntStateOf(prefs.getInt("preset", 0)) }
     var gain by remember { mutableFloatStateOf(prefs.getFloat("gain", 0f)) }
@@ -752,7 +752,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
         }
 
         // 简单模式下隐藏 EQ 控件
-        if (eqMode.intValue >= 1) {
+        if (eqMode >= 1) {
         // ============================================================
         // 主控件区 — 根据引擎模式
         // ============================================================
@@ -933,7 +933,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                     colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8)))
                 }
                 // 压缩机
-                Text("压缩机 (炸麦)", fontSize = 12.sp, color = Color(0xFF888888))
+                Text("动态压缩", fontSize = 12.sp, color = Color(0xFF888888))
                 EqSlider("阈值", compThreshold, -60f..0f) { compThreshold = it
                     NativeAudioProcessor.setCompressor(compThreshold, compRatio, compMakeup) }
                 EqSlider("压缩比", compRatio, 1f..20f) { compRatio = it
