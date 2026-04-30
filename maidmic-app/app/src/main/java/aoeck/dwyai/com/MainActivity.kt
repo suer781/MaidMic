@@ -627,14 +627,25 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             .padding(horizontal = 16.dp)
     ) {
         // ============================================================
-        // 顶部：标题 + 引擎 + 设置齿轮
+        // 顶部：标题 + 引擎 + 引擎健康 + 设置齿轮
         // ============================================================
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("MaidMic", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("MaidMic", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(6.dp))
+                    // 引擎健康指示灯
+                    val health = NativeAudioProcessor.getHealth()
+                    val (healthColor, healthIcon) = when (health) {
+                        EngineHealth.OK -> Color(0xFF4CAF50) to Icons.Default.CheckCircle
+                        EngineHealth.FALLBACK -> Color(0xFFFFA726) to Icons.Default.Warning
+                        EngineHealth.BROKEN -> Color.Red to Icons.Default.Error
+                    }
+                    Icon(healthIcon, null, tint = healthColor, modifier = Modifier.size(12.dp))
+                }
                 Text(currentEngine.displayName, fontSize = 11.sp, color = Color(0xFFCE93D8))
             }
             // 设置齿轮（永久常驻）
