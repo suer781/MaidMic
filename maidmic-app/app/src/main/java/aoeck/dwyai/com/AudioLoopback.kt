@@ -17,7 +17,7 @@ object AudioLoopback {
 
     private const val TAG = "AudioLoopback"
     private const val SAMPLE_RATE = 48000
-    private const val CHANNELS = 1
+    private const val CHANNEL_MASK = AudioFormat.CHANNEL_IN_MONO
     private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
 
     // 可选的 buffer 大小（帧数）
@@ -56,14 +56,14 @@ object AudioLoopback {
         NativeAudioProcessor.ensureLoaded()
 
         val bufSizeBytes = bufferFrames * 2 // 16-bit
-        val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNELS, ENCODING)
+        val minRecBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_MASK, ENCODING)
             .coerceAtLeast(bufSizeBytes)
         val minTrkBuf = AudioTrack.getMinBufferSize(SAMPLE_RATE,
             AudioFormat.CHANNEL_OUT_MONO, ENCODING).coerceAtLeast(bufSizeBytes)
 
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE, CHANNELS, ENCODING, minRecBuf
+            SAMPLE_RATE, CHANNEL_MASK, ENCODING, minRecBuf
         )
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
             Log.e(TAG, "AudioRecord init failed")
