@@ -560,6 +560,9 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
     val prefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
     val appPrefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
 
+    // 首页模式（读取设置页保存的值）
+    val eqMode = remember { mutableIntStateOf(appPrefs.getInt("settings_mode", 1)) }
+
     var selectedPreset by remember { mutableIntStateOf(prefs.getInt("preset", 0)) }
     var gain by remember { mutableFloatStateOf(prefs.getFloat("gain", 0f)) }
     var bass by remember { mutableFloatStateOf(prefs.getFloat("bass", 0f)) }
@@ -748,6 +751,8 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             Spacer(Modifier.height(8.dp))
         }
 
+        // 简单模式下隐藏 EQ 控件
+        if (eqMode.intValue >= 1) {
         // ============================================================
         // 主控件区 — 根据引擎模式
         // ============================================================
@@ -855,6 +860,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                 }
             }
         }
+        } // 简单模式下隐藏 EQ 控件结束
 
         Spacer(Modifier.height(14.dp))
 
@@ -932,7 +938,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
         // ============================================================
         // 可折叠高级音频设置（引擎 + 格式 + 缓冲）
         // ============================================================
-        var showAdvanced by remember { mutableStateOf(false) }
+        var showAdvanced by remember { mutableStateOf(true) }
         Surface(
             onClick = { showAdvanced = !showAdvanced },
             color = Color(0xFF2A2930),
