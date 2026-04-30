@@ -258,7 +258,7 @@ fun MaidMicMain(context: Context) {
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
             when (currentNav) {
-                NavItem.Basic -> EqPage(context = context)
+                NavItem.Basic -> EqPage(context = context, onOpenSettings = { showSettings = true })
                 NavItem.Editor -> ModuleChainEditor(
                     isDagMode = isDagMode,
                     nodes = pipelineNodes,
@@ -421,7 +421,7 @@ fun detectAudioDevice(context: Context): String {
 // ============================================================
 
 @Composable
-fun EqPage(context: Context) {
+fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
     val prefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
     val appPrefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
 
@@ -496,7 +496,7 @@ fun EqPage(context: Context) {
             .padding(horizontal = 16.dp)
     ) {
         // ============================================================
-        // 顶部：标题 + 引擎 + 旁路开关
+        // 顶部：标题 + 引擎 + 设置齿轮
         // ============================================================
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
@@ -506,23 +506,9 @@ fun EqPage(context: Context) {
                 Text("MaidMic", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text(currentEngine.displayName, fontSize = 11.sp, color = Color(0xFFCE93D8))
             }
-            // 旁路开关
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("旁路", fontSize = 11.sp, color = Color(0xFF888888))
-                Spacer(Modifier.width(4.dp))
-                Switch(
-                    checked = bypass,
-                    onCheckedChange = { b ->
-                        bypass = b
-                        if (b) {
-                            NativeAudioProcessor.setEngine(AudioEngine.PASSTHROUGH)
-                        } else {
-                            NativeAudioProcessor.setEngine(currentEngine)
-                        }
-                    },
-                    modifier = Modifier.height(24.dp),
-                    colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8))
-                )
+            // 设置齿轮（永久常驻）
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Default.Settings, "设置", tint = Color(0xFFCE93D8))
             }
         }
 
@@ -555,7 +541,47 @@ fun EqPage(context: Context) {
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        // ============================================================
+        // 旁路开关（独立控制行）
+        // ============================================================
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = if (bypass) Color(0xFF4A2561) else Color(0xFF2A2930)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    if (bypass) Icons.Default.PowerSettingsNew else Icons.Default.FlashOn,
+                    null,
+                    tint = if (bypass) Color(0xFFCE93D8) else Color(0xFF666666),
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (bypass) "已旁路 - 音频直通" else "旁路模式",
+                    fontSize = 12.sp,
+                    color = if (bypass) Color(0xFFCE93D8) else Color(0xFF888888),
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = bypass,
+                    onCheckedChange = { b ->
+                        bypass = b
+                        if (b) {
+                            NativeAudioProcessor.setEngine(AudioEngine.PASSTHROUGH)
+                        } else {
+                            NativeAudioProcessor.setEngine(currentEngine)
+                        }
+                    },
+                    modifier = Modifier.height(24.dp),
+                    colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8))
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
 
         // ============================================================
         // 频响曲线图 (Canvas)
@@ -848,7 +874,7 @@ fun EqSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>
 // ============================================================
 // 测试变声 — 录音 → 引擎处理 → 回放
 // ============================================================
-// 设置页面（权限、外观、模块链入口）
+// 设置页面（全面参数配置 — 所有数值皆可调）
 @Composable
 fun SettingsPage(
     onBack: () -> Unit,
@@ -857,8 +883,35 @@ fun SettingsPage(
 ) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
-    // 当前引擎
+    val audioPrefs = context.getSharedPreferences("maidmic_audio_params", Context.MODE_PRIVATE)
+
+    // === 音频格式参数 ===
+    var sampleRate by remember { mutableIntStateOf(audioPrefs.getInt("sample_rate", 48000)) }
+    var bitDepth by remember { mutableIntStateOf(audioPrefs.getInt("bit_depth", 16)) }
+    var channels by remember { mutableIntStateOf(audioPrefs.getInt("channels", 2)) }
+    var bitrate by remember { mutableIntStateOf(audioPrefs.getInt("bitrate", 192)) }
+    var encoderMode by remember { mutableIntStateOf(audioPrefs.getInt("encoder_mode", 0)) }
+
+    // === 缓冲与处理参数 ===
+    var bufferSize by remember { mutableIntStateOf(audioPrefs.getInt("buffer_size", 256)) }
+    var frameSize by remember { mutableIntStateOf(audioPrefs.getInt("frame_size", 1024)) }
+    var overlapRatio by remember { mutableIntStateOf(audioPrefs.getInt("overlap_ratio", 50)) }
+
+    // === 引擎 ===
     var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
+
+    fun saveAudioParams() {
+        audioPrefs.edit()
+            .putInt("sample_rate", sampleRate)
+            .putInt("bit_depth", bitDepth)
+            .putInt("channels", channels)
+            .putInt("bitrate", bitrate)
+            .putInt("encoder_mode", encoderMode)
+            .putInt("buffer_size", bufferSize)
+            .putInt("frame_size", frameSize)
+            .putInt("overlap_ratio", overlapRatio)
+            .apply()
+    }
 
     Column(
         modifier = Modifier
@@ -872,15 +925,198 @@ fun SettingsPage(
             Spacer(Modifier.width(8.dp))
             Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // 音频格式（采样率/位深度/声道数/比特率）
+        // ============================================================
+        Text("音频格式", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+
+        // 采样率
+        AudioParamRow(label = "采样率", value = when(sampleRate) {
+            44100 -> "44.1 kHz"
+            48000 -> "48 kHz"
+            96000 -> "96 kHz"
+            else -> "${sampleRate/1000} kHz"
+        }) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                listOf(44100, 48000, 96000).forEach { rate ->
+                    FilterChip(
+                        selected = sampleRate == rate,
+                        onClick = { sampleRate = rate; saveAudioParams() },
+                        label = { Text("${rate/1000}k", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 位深度
+        AudioParamRow(label = "位深度", value = when(bitDepth) {
+            16 -> "16-bit Int"
+            24 -> "24-bit Int"
+            32 -> "32-bit Float"
+            else -> "$bitDepth-bit"
+        }) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(16 to "16bit", 24 to "24bit", 32 to "32 Float").forEach { (depth, lbl) ->
+                    FilterChip(
+                        selected = bitDepth == depth,
+                        onClick = { bitDepth = depth; saveAudioParams() },
+                        label = { Text(lbl, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 声道数
+        AudioParamRow(label = "声道数", value = if (channels == 1) "单声道" else "立体声") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(1 to "单声道", 2 to "立体声").forEach { (cnt, lbl) ->
+                    FilterChip(
+                        selected = channels == cnt,
+                        onClick = { channels = cnt; saveAudioParams() },
+                        label = { Text(lbl, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 比特率
+        AudioParamRow(label = "比特率", value = "${bitrate} kbps") {
+            Slider(
+                value = bitrate.toFloat(),
+                onValueChange = { bitrate = it.toInt(); saveAudioParams() },
+                valueRange = 64f..320f, steps = 15,
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(thumbColor = Color(0xFFCE93D8), activeTrackColor = Color(0xFFCE93D8))
+            )
+        }
 
         Spacer(Modifier.height(16.dp))
 
-        // 权限配置
+        // ============================================================
+        // 缓冲与处理（缓冲区/帧长度/重叠率）
+        // ============================================================
+        Text("缓冲与处理", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+
+        // 缓冲区大小
+        val bufLatencyMs = bufferSize * 1000 / sampleRate
+        AudioParamRow(label = "缓冲区大小", value = "${bufferSize} 样本 (~${bufLatencyMs}ms)") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                listOf(64, 128, 256, 512, 1024).forEach { size ->
+                    FilterChip(
+                        selected = bufferSize == size,
+                        onClick = { bufferSize = size; saveAudioParams() },
+                        label = { Text("$size", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 帧长度/窗长
+        AudioParamRow(label = "帧长度 (窗长)", value = "$frameSize 点") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                listOf(256, 512, 1024, 2048).forEach { size ->
+                    FilterChip(
+                        selected = frameSize == size,
+                        onClick = { frameSize = size; saveAudioParams() },
+                        label = { Text("$size", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                when (frameSize) {
+                    256 -> "高时间分辨率，适合快速变化信号"
+                    512 -> "均衡时频分辨率"
+                    1024 -> "标准 FFT 窗，频率精度好"
+                    else -> "高频率分辨率，适合稳态信号"
+                }, fontSize = 10.sp, color = Color(0xFF666666)
+            )
+        }
+
+        // 重叠率 + 帧移联动显示
+        AudioParamRow(label = "重叠率", value = "$overlapRatio%") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(0, 25, 50, 75).forEach { ratio ->
+                    FilterChip(
+                        selected = overlapRatio == ratio,
+                        onClick = { overlapRatio = ratio; saveAudioParams() },
+                        label = { Text("$ratio%", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 帧移（只读，自动计算）
+        val hopSize = (frameSize * (100 - overlapRatio) / 100).coerceAtLeast(1)
+        AudioParamRow(label = "帧移 (Hop Size)", value = "$hopSize 点（自动）") {
+            Text("← 由帧长度与重叠率决定", fontSize = 10.sp, color = Color(0xFF555555))
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // 编码选项（CBR/VBR/ABR）
+        // ============================================================
+        Text("编码选项", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+
+        AudioParamRow(
+            label = "码率控制",
+            value = when (encoderMode) { 0 -> "CBR 固定"; 1 -> "VBR 可变"; else -> "ABR 平均" }
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(0 to "CBR", 1 to "VBR", 2 to "ABR").forEach { (idx, lbl) ->
+                    FilterChip(
+                        selected = encoderMode == idx,
+                        onClick = { encoderMode = idx; saveAudioParams() },
+                        label = { Text(lbl, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                when (encoderMode) {
+                    0 -> "固定比特率，文件大小可控"
+                    1 -> "可变比特率，空间效率高"
+                    else -> "平均比特率，折中方案"
+                }, fontSize = 10.sp, color = Color(0xFF666666)
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // ============================================================
+        // 音频方案（保留原有权限配置）
+        // ============================================================
         Text("音频方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
 
         SettingsCard(icon = Icons.Default.Lock, title = "Root AudioFlinger", desc = "需要 ROOT 权限") {
-            // 检测 root → 启动 RootMicBridge
             val rootBridge = RootMicBridge(context)
             val status = rootBridge.checkRoot()
             if (status.granted) {
@@ -902,79 +1138,52 @@ fun SettingsPage(
 
         Spacer(Modifier.height(20.dp))
 
-        // 引擎选择
+        // ============================================================
+        // 音频引擎（保留）
+        // ============================================================
         Text("音频引擎", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AudioEngine.entries.forEach { engine ->
                 FilterChip(
                     selected = currentEngine == engine,
-                    onClick = {
-                        currentEngine = engine
-                        onEngineChanged(engine)
-                    },
+                    onClick = { currentEngine = engine; onEngineChanged(engine) },
                     label = { Text(engine.displayName, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = Color(0xFFCE93D8),
-                        selectedLabelColor = Color.Black
+                        selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
                     )
                 )
             }
         }
         Spacer(Modifier.height(4.dp))
-        Text(
-            currentEngine.description,
-            fontSize = 11.sp,
-            color = Color(0xFF666666)
-        )
+        Text(currentEngine.description, fontSize = 11.sp, color = Color(0xFF666666))
 
-        // 频响曲线预设选择（仅 FREQ_CURVE 引擎时显示）
+        // 频响曲线预设（仅 FREQ_CURVE 时显示）
         if (currentEngine == AudioEngine.FREQ_CURVE) {
             Spacer(Modifier.height(12.dp))
             Text("曲线预设", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
             Spacer(Modifier.height(6.dp))
-            // 预设卡片列表
-            val presets = CurvePresets.ALL
-            presets.forEachIndexed { index, preset ->
+            CurvePresets.ALL.forEachIndexed { index, preset ->
                 Card(
                     onClick = {
                         NativeAudioProcessor.setCurvePreset(index)
-                        // 同步保存
                         prefs.edit().putInt("curve_preset", index).apply()
                     },
                     colors = CardDefaults.cardColors(
-                        containerColor = if (index == NativeAudioProcessor.currentCurvePreset)
-                            Color(0xFF2A1A2E) else Color(0xFF1E1E1E)
+                        containerColor = if (index == NativeAudioProcessor.currentCurvePreset) Color(0xFF2A1A2E) else Color(0xFF1E1E1E)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 选中指示器
+                    Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (index == NativeAudioProcessor.currentCurvePreset) {
-                            Icon(
-                                Icons.Default.CheckCircle,
-                                null,
-                                tint = Color(0xFFCE93D8),
-                                modifier = Modifier.size(18.dp)
-                            )
+                            Icon(Icons.Default.CheckCircle, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
                         }
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                preset.name,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (index == NativeAudioProcessor.currentCurvePreset) Color(0xFFCE93D8) else Color.White
-                            )
-                            Text(
-                                preset.description,
-                                fontSize = 11.sp,
-                                color = Color(0xFF888888)
-                            )
+                            Text(preset.name, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                                color = if (index == NativeAudioProcessor.currentCurvePreset) Color(0xFFCE93D8) else Color.White)
+                            Text(preset.description, fontSize = 11.sp, color = Color(0xFF888888))
                         }
                         Icon(Icons.Default.ChevronRight, null, tint = Color(0xFF555555), modifier = Modifier.size(16.dp))
                     }
@@ -985,11 +1194,39 @@ fun SettingsPage(
 
         Spacer(Modifier.height(20.dp))
 
-        // 开发者选项入口
+        // ============================================================
+        // 其他（开发者选项）
+        // ============================================================
         Text("其他", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
         SettingsCard(icon = Icons.Default.DeveloperMode, title = "开发者选项", desc = "高级功能 · 谨慎操作") {
             onOpenDeveloperSettings()
+        }
+        Spacer(Modifier.height(40.dp)) // 底部留白
+    }
+}
+
+// ============================================================
+// 音频参数行组件（统一布局）
+// ============================================================
+@Composable
+fun AudioParamRow(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = modifier.fillMaxWidth().padding(vertical = 3.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, fontSize = 13.sp, color = Color.White, modifier = Modifier.weight(1f))
+                Text(value, fontSize = 12.sp, color = Color(0xFFCE93D8))
+            }
+            Spacer(Modifier.height(6.dp))
+            content()
         }
     }
 }
