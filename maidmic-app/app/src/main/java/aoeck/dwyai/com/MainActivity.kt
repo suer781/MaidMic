@@ -194,6 +194,8 @@ fun MaidMicMain(context: Context) {
     LaunchedEffect(Unit) {
         NativeAudioProcessor.loadEngine(prefs)
         AppLogger.i("Engine", "引擎已加载: ${NativeAudioProcessor.getEngine().key}")
+        // 确保 JNI 已加载
+        NativeAudioProcessor.ensureLoaded()
         // 确保 DSP 参数已初始化（即使使用默认预设）
         val eqPrefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
         NativeAudioProcessor.setEqParams(
