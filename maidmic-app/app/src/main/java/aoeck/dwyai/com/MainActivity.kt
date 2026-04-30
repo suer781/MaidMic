@@ -340,8 +340,15 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
         val micGranted = results[Manifest.permission.RECORD_AUDIO] == true
-        val notifGranted = results[Manifest.permission.POST_NOTIFICATIONS] == true
+        val notifGranted = if (Build.VERSION.SDK_INT >= 33)
+            results[Manifest.permission.POST_NOTIFICATIONS] == true else true
         AppLogger.i("Onboarding", "权限结果: 麦克风=${if(micGranted)"✓" else "✗"} 通知=${if(notifGranted)"✓" else "✗"}")
+        // 更新响应式状态，触发 UI 重绘
+        hasMicState = micGranted ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        hasNotifState = notifGranted ||
+            (Build.VERSION.SDK_INT < 33) ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 
     // Shizuku 授权监听
@@ -357,11 +364,17 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
         onDispose { Shizuku.removeRequestPermissionResultListener(listener) }
     }
 
-    // 当前权限状态（响应式）
-    val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    val hasNotif = if (Build.VERSION.SDK_INT >= 33)
-        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-    else true
+    // 当前权限状态（响应式 — 随权限回调更新）
+    var hasMicState by remember { mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    ) }
+    var hasNotifState by remember { mutableStateOf(
+        if (Build.VERSION.SDK_INT >= 33)
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        else true
+    ) }
+    val hasMic = hasMicState
+    val hasNotif = hasNotifState
 
     // 自动请求权限（首次进入时）
     LaunchedEffect(Unit) {
