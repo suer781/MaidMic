@@ -179,6 +179,17 @@ fun MaidMicMain(context: Context) {
         AppLogger.i("UGC", "UGC 插件: ${if (isUgcEnabled) "启用" else "禁用"}")
     }
 
+    // 全局 Shizuku 授权监听（持久化，跨页面有效）
+    DisposableEffect(Unit) {
+        val listener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+            val msg = if (grantResult == PackageManager.PERMISSION_GRANTED) "Shizuku 已授权" else "Shizuku 授权被拒绝"
+            AppLogger.i("Shizuku", msg)
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+        Shizuku.addRequestPermissionResultListener(listener)
+        onDispose { Shizuku.removeRequestPermissionResultListener(listener) }
+    }
+
     // 启动时恢复引擎设置
     LaunchedEffect(Unit) {
         NativeAudioProcessor.loadEngine(prefs)
@@ -308,23 +319,45 @@ fun MaidMicMain(context: Context) {
 
 @Composable
 fun OnboardingPage(context: Context, onDone: () -> Unit) {
-    // 自动请求：录音 + 通知
-    val micLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { }
-    val notifLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { }
+    // 权限请求（多个权限一次请求）
+    val permLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val micGranted = results[Manifest.permission.RECORD_AUDIO] == true
+        val notifGranted = results[Manifest.permission.POST_NOTIFICATIONS] == true
+        AppLogger.i("Onboarding", "权限结果: 麦克风=${if(micGranted)"✓" else "✗"} 通知=${if(notifGranted)"✓" else "✗"}")
+    }
 
+    // Shizuku 授权监听
+    var shizukuGranted by remember { mutableStateOf(false) }
+    var shizukuChecked by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        val listener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+            shizukuGranted = grantResult == PackageManager.PERMISSION_GRANTED
+            shizukuChecked = true
+            AppLogger.i("Shizuku", "授权结果: ${if(shizukuGranted)"已授权" else "已拒绝"}")
+        }
+        Shizuku.addRequestPermissionResultListener(listener)
+        onDispose { Shizuku.removeRequestPermissionResultListener(listener) }
+    }
+
+    // 当前权限状态（响应式）
     val hasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     val hasNotif = if (Build.VERSION.SDK_INT >= 33)
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     else true
 
-    // 自动请求权限
+    // 自动请求权限（首次进入时）
     LaunchedEffect(Unit) {
-        if (!hasMic) micLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        if (!hasNotif && Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        val needMic = !hasMic
+        val needNotif = !hasNotif && Build.VERSION.SDK_INT >= 33
+        if (needMic || needNotif) {
+            AppLogger.i("Onboarding", "请求权限: 麦克风=$needMic 通知=$needNotif")
+            permLauncher.launch(
+                if (needNotif) arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+                else arrayOf(Manifest.permission.RECORD_AUDIO)
+            )
+        }
     }
 
     Box(
@@ -354,9 +387,23 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
                 Toast.makeText(context, "Root 模式需要 ROOT 权限", Toast.LENGTH_SHORT).show()
             }
             Spacer(Modifier.height(8.dp))
-            MicModeCard("方案B: Shizuku AAudio", "推荐 · 非 root", Icons.Default.Security) {
-                try { Shizuku.requestPermission(0); Toast.makeText(context, "请求 Shizuku 权限...", Toast.LENGTH_SHORT).show() }
-                catch (_: Exception) { Toast.makeText(context, "Shizuku 未安装", Toast.LENGTH_SHORT).show() }
+            // Shizuku 方案（带授权状态反馈）
+            MicModeCard(
+                "方案B: Shizuku AAudio",
+                if (shizukuChecked) {
+                    if (shizukuGranted) "✓ 已授权" else "✗ 未授权"
+                } else "推荐 · 非 root",
+                Icons.Default.Security
+            ) {
+                try {
+                    shizukuChecked = false
+                    Shizuku.requestPermission(0)
+                    Toast.makeText(context, "请求 Shizuku 权限...", Toast.LENGTH_SHORT).show()
+                    AppLogger.i("Shizuku", "请求授权")
+                } catch (_: Exception) {
+                    Toast.makeText(context, "Shizuku 未安装", Toast.LENGTH_SHORT).show()
+                    AppLogger.e("Shizuku", "Shizuku 未安装或不可用")
+                }
             }
             Spacer(Modifier.height(8.dp))
             MicModeCard("方案C: 无障碍服务", "最兼容", Icons.Default.Visibility) {
@@ -364,8 +411,25 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
             }
 
             Spacer(Modifier.height(24.dp))
-            Button(onClick = onDone, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFCE93D8))) {
-                Text("开始使用", color = Color.Black, fontWeight = FontWeight.Bold)
+            // "开始使用"按钮 — 必须有麦克风权限
+            Button(
+                onClick = {
+                    val nowHasMic = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                    if (nowHasMic) {
+                        AppLogger.i("Onboarding", "权限完备，进入主界面")
+                        onDone()
+                    } else {
+                        AppLogger.w("Onboarding", "麦克风权限尚未授予，再次请求")
+                        Toast.makeText(context, "请先授予录音权限", Toast.LENGTH_SHORT).show()
+                        permLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (hasMic) Color(0xFFCE93D8) else Color(0xFF555555)
+                )
+            ) {
+                Text(if (hasMic) "开始使用" else "请先授予录音权限", color = Color.Black, fontWeight = FontWeight.Bold)
             }
         }
     }
