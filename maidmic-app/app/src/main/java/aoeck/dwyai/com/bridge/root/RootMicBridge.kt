@@ -46,8 +46,8 @@ class RootMicBridge(private val context: Context) {
     /** 检查 Magisk root 并获取版本 */
     fun checkRoot(): RootStatus {
         return try {
-            // 先试 su
-            val proc = Runtime.getRuntime().exec("su -c 'echo SU_OK && id -u'")
+            // 先试 su（必须用数组形式，否则 exec 不解析参数）
+            val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", "echo SU_OK && id -u"))
             val reader = BufferedReader(InputStreamReader(proc.inputStream))
             val firstLine = reader.readLine() ?: ""
             val uid = reader.readLine() ?: ""
@@ -56,7 +56,7 @@ class RootMicBridge(private val context: Context) {
                 hasRoot = true
                 // 检查 Magisk 版本
                 try {
-                    val magiskProc = Runtime.getRuntime().exec("su -c 'magisk -v'")
+                    val magiskProc = Runtime.getRuntime().exec(arrayOf("su", "-c", "magisk -v"))
                     magiskVersion = BufferedReader(InputStreamReader(magiskProc.inputStream)).readLine() ?: "unknown"
                 } catch (_: Exception) {
                     magiskVersion = "unknown (su only)"
