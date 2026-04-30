@@ -97,6 +97,7 @@ object NativeAudioProcessor {
     fun getEngine(): AudioEngine = currentEngine
 
     fun setEngine(engine: AudioEngine): Boolean {
+        AppLogger.i("Engine", "切换引擎: ${currentEngine.key} -> ${engine.key}")
         currentEngine = engine
         return true
     }
@@ -105,6 +106,7 @@ object NativeAudioProcessor {
         val saved = prefs.getString(KEY_ENGINE, AudioEngine.ECHIO_EQ.key) ?: AudioEngine.ECHIO_EQ.key
         currentEngine = AudioEngine.entries.find { it.key == saved } ?: AudioEngine.ECHIO_EQ
         currentCurvePreset = prefs.getInt(KEY_CURVE_PRESET, 0)
+        AppLogger.i("Engine", "从存储恢复: ${currentEngine.key}, 曲线预设=$currentCurvePreset")
     }
 
     fun saveEngine(prefs: SharedPreferences) {
@@ -140,7 +142,11 @@ object NativeAudioProcessor {
     fun setEqParams(gainDb: Float, bassDb: Float, trebleDb: Float, reverbMix: Float, pitchSemitones: Int,
                     formantShift: Float = 0f, distortion: Float = 0f,
                     echoDelayMs: Float = 0f, echoDecay: Float = 0f) {
-        if (!loaded) return
+        if (!loaded) {
+            AppLogger.w("Engine", "setEqParams 跳过(JNI未加载)")
+            return
+        }
+        AppLogger.i("Engine", "setEqParams: gain=$gainDb bass=$bassDb treble=$trebleDb reverb=$reverbMix pitch=$pitchSemitones formant=$formantShift dist=$distortion echo=${echoDelayMs}ms decay=$echoDecay")
         nativeSetEqParams(gainDb, bassDb, trebleDb, reverbMix, pitchSemitones,
                           formantShift, distortion, echoDelayMs, echoDecay)
     }
@@ -158,23 +164,28 @@ object NativeAudioProcessor {
     fun processAudio(input: ByteArray, output: ByteArray, size: Int) {
         if (size <= 0) return
 
+        AppLogger.d("Engine", "processAudio: engine=${currentEngine.key} loaded=$loaded size=$size")
         when (currentEngine) {
             AudioEngine.PASSTHROUGH -> {
                 System.arraycopy(input, 0, output, 0, size)
             }
             AudioEngine.ECHIO_EQ -> {
                 if (!loaded) {
+                    AppLogger.w("Engine", "ECHIO_EQ fallback: JNI未加载，直通")
                     System.arraycopy(input, 0, output, 0, size)
                     return
                 }
                 nativeProcessAudio(input, output, size)
+                AppLogger.d("Engine", "nativeProcessAudio 完成")
             }
             AudioEngine.FREQ_CURVE -> {
                 if (!loaded) {
+                    AppLogger.w("Engine", "FREQ_CURVE fallback: JNI未加载，直通")
                     System.arraycopy(input, 0, output, 0, size)
                     return
                 }
                 nativeProcessFreqCurve(input, output, size)
+                AppLogger.d("Engine", "nativeProcessFreqCurve 完成")
             }
         }
     }
