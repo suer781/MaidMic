@@ -5,10 +5,12 @@
 package aoeck.dwyai.com
 
 import android.Manifest
+import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -28,6 +30,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,6 +54,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -61,6 +66,20 @@ import aoeck.dwyai.com.ui.editor.PipelineNode
 import aoeck.dwyai.com.ui.CreditsPage
 import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
 import aoeck.dwyai.com.bridge.root.RootMicBridge
+import aoeck.dwyai.com.streaming.ConnectionManager
+import aoeck.dwyai.com.streaming.ConnectionState
+import aoeck.dwyai.com.streaming.MicMode
+import aoeck.dwyai.com.streaming.PeerDevice
+import aoeck.dwyai.com.streaming.StreamingSink
+import aoeck.dwyai.com.streaming.StreamingSource
+import aoeck.dwyai.com.streaming.QRCodeUtil
+import aoeck.dwyai.com.streaming.TransportType
+
+// ZXing 二维码扫描
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 
 // ============================================================
 // 导航项
@@ -84,6 +103,14 @@ class MainActivity : ComponentActivity() {
             MaidMicTheme {
                 MaidMicMain(context = this@MainActivity)
             }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        val prefs = getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("hide_recents", false)) {
+            finishAndRemoveTask()
         }
     }
 }
@@ -177,7 +204,29 @@ fun MaidMicMain(context: Context) {
         AppLogger.i("UGC", "UGC 插件: ${if (isUgcEnabled) "启用" else "禁用"}")
     }
 
-    // 全局 Shizuku 授权监听（持久化，跨页面有效）
+    // ============================================================
+    // 双设备模式 — 麦克风端 / 接收端
+    // ============================================================
+    val connectionManager = remember { ConnectionManager(context) }
+    var micMode by remember { mutableStateOf(MicMode.RECEIVER) }
+    var connState by remember { mutableStateOf(ConnectionState.IDLE) }
+    var connectedDevice by remember { mutableStateOf<PeerDevice?>(null) }
+    var localIp by remember { mutableStateOf("") }
+    var targetIp by remember { mutableStateOf("") }
+
+    // 监听连接状态
+    LaunchedEffect(micMode) {
+        connectionManager.onStateChange = { newState ->
+            connState = newState
+            if (newState == ConnectionState.CONNECTED) {
+                connectedDevice = connectionManager.connectedDevice
+            } else if (newState == ConnectionState.DISCONNECTED) {
+                connectedDevice = null
+            }
+        }
+    }
+
+    // ============================================================
     DisposableEffect(Unit) {
         val listener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
             val msg = if (grantResult == PackageManager.PERMISSION_GRANTED) "Shizuku 已授权" else "Shizuku 授权被拒绝"
@@ -207,12 +256,6 @@ fun MaidMicMain(context: Context) {
             eqPrefs.getFloat("echo_delay", 0f),
             eqPrefs.getFloat("echo_decay", 0f)
         )
-        // 如果是 FREQ_CURVE 引擎，恢复曲线预设
-        if (NativeAudioProcessor.getEngine() == AudioEngine.FREQ_CURVE) {
-            val savedCurve = prefs.getInt("curve_preset", 0)
-            NativeAudioProcessor.setCurvePreset(savedCurve)
-            AppLogger.i("Engine", "频响曲线预设已恢复: index=$savedCurve")
-        }
         AppLogger.i("Engine", "DSP参数已初始化到引擎")
     }
 
@@ -304,7 +347,15 @@ fun MaidMicMain(context: Context) {
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
             when (currentNav) {
-                NavItem.Basic -> EqPage(context = context, onOpenSettings = { showSettings = true })
+                NavItem.Basic -> EqPage(
+                    context = context,
+                    onOpenSettings = { showSettings = true },
+                    connectionManager = connectionManager,
+                    micMode = micMode,
+                    onMicModeChange = { micMode = it },
+                    connState = connState,
+                    connectedDevice = connectedDevice
+                )
                 NavItem.Editor -> ModuleChainEditor(
                     isDagMode = isDagMode,
                     nodes = pipelineNodes,
@@ -415,11 +466,10 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
             Text("选择虚拟麦克风方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFCCCCCC))
             Spacer(Modifier.height(12.dp))
 
-            // Root 状态检测（异步）- 使用 remember 保持同一实例
-            val rootBridge = remember { RootMicBridge(context) }
+            // Root 状态检测（异步）
             var rootStatus by remember { mutableStateOf<RootMicBridge.RootStatus?>(null) }
             LaunchedEffect(Unit) {
-                rootStatus = rootBridge.checkRoot()
+                rootStatus = RootMicBridge(context).checkRoot()
                 AppLogger.i("Onboarding", "Root检测: granted=${rootStatus?.granted} ver=${rootStatus?.magiskVer}")
             }
 
@@ -432,7 +482,8 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
                 if (rootStatus?.granted == true) Icons.Default.CheckCircle else Icons.Default.Lock
             ) {
                 if (rootStatus?.granted == true) {
-                    rootBridge.start()
+                    val bridge = RootMicBridge(context)
+                    bridge.start()
                     Toast.makeText(context, "Root 模式已启动", Toast.LENGTH_SHORT).show()
                     AppLogger.i("Root", "启动 Root 音频环回")
                 } else {
@@ -552,16 +603,188 @@ fun detectAudioDevice(context: Context): String {
 }
 
 // ============================================================
+// 流式模式UI组件 — SOURCE端 / RECEIVER端
+// ============================================================
+
+@Composable
+private fun SOURCE端UI(
+    cm: ConnectionManager,
+    transport: TransportType,
+    connState: ConnectionState
+) {
+    val context = LocalContext.current
+    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
+    // 生成二维码
+    LaunchedEffect(transport) {
+        qrBitmap = when (transport) {
+            TransportType.WIFI_UDP -> QRCodeUtil.generateWifiQr(cm.getLocalIpAddress())
+            TransportType.BLUETOOTH_RFCOMM -> QRCodeUtil.generateBtQr(cm.getLocalBtName())
+        }
+    }
+
+    if (transport == TransportType.WIFI_UDP) {
+        Text("本机IP: ${cm.getLocalIpAddress()}", fontSize = 10.sp, color = Color(0xFF80CBC4))
+    } else {
+        Text("本机蓝牙: ${cm.getLocalBtName()}", fontSize = 10.sp, color = Color(0xFF80CBC4))
+    }
+    Spacer(Modifier.height(4.dp))
+
+    // 二维码
+    qrBitmap?.let { bmp ->
+        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(color = Color.White, shape = RoundedCornerShape(8.dp), modifier = Modifier.size(120.dp)) {
+                Image(bmp.asImageBitmap(), "连接二维码", modifier = Modifier.fillMaxSize().padding(4.dp))
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("接收端扫此码连接", fontSize = 9.sp, color = Color(0xFF888888))
+            Spacer(Modifier.height(4.dp))
+        }
+    }
+
+    Button(
+        onClick = {
+            cm.startServer(transport)
+            Thread { cm.waitForPeer() }.start()
+        },
+        enabled = connState != ConnectionState.CONNECTED,
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00695C)),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            when (connState) {
+                ConnectionState.IDLE -> "📡 启动"
+                ConnectionState.WAITING -> "⏳ 等待对方..."
+                ConnectionState.CONNECTED -> "✅ 已连接"
+                ConnectionState.ERROR -> "❌ 失败，重试"
+                else -> connState.name
+            }, fontSize = 12.sp
+        )
+    }
+    if (connState == ConnectionState.CONNECTED) {
+        Button(
+            onClick = { cm.disconnect() },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C)),
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("断开", fontSize = 12.sp) }
+    }
+}
+
+@Composable
+private fun RECEIVER端UI(
+    cm: ConnectionManager,
+    transport: TransportType,
+    connState: ConnectionState,
+    context: Context
+) {
+    var targetAddr by remember { mutableStateOf("") }
+    var scannedDevices by remember { mutableStateOf(listOf<BluetoothDevice>()) }
+
+    // 二维码扫描结果处理
+    val scanLauncher = rememberLauncherForActivityResult(
+        contract = ScanContract()
+    ) { result ->
+        val qrData = result.contents ?: ""
+        val info = QRCodeUtil.parseQrData(qrData)
+        if (info != null) {
+            if (info.transport == TransportType.WIFI_UDP) {
+                targetAddr = info.address
+                Thread { cm.connectTo(info.address, TransportType.WIFI_UDP) }.start()
+            } else {
+                Thread { cm.connectTo(info.address, TransportType.BLUETOOTH_RFCOMM) }.start()
+            }
+        }
+    }
+
+    // 扫一扫按钮
+    Button(
+        onClick = {
+            val options = ScanOptions().apply {
+                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                setPrompt("扫描 MaidMic 连接二维码")
+            }
+            scanLauncher.launch(options)
+        },
+        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4A2561)),
+        modifier = Modifier.fillMaxWidth()
+    ) { Text("📷 扫一扫连接", fontSize = 12.sp) }
+
+    Spacer(Modifier.height(6.dp))
+
+    if (transport == TransportType.WIFI_UDP) {
+        OutlinedTextField(
+            value = targetAddr,
+            onValueChange = { targetAddr = it },
+            label = { Text("麦克风IP", fontSize = 10.sp) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        Button(
+            onClick = { Thread { cm.connectTo(targetAddr, TransportType.WIFI_UDP) }.start() },
+            enabled = connState != ConnectionState.CONNECTED && targetAddr.isNotBlank(),
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00695C)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                when (connState) {
+                    ConnectionState.IDLE -> "🔗 WiFi连接"
+                    ConnectionState.CONNECTING -> "⏳ 连接中..."
+                    ConnectionState.CONNECTED -> "✅ 已连接"
+                    ConnectionState.ERROR -> "❌ 失败，重试"
+                    else -> connState.name
+                }, fontSize = 12.sp
+            )
+        }
+    } else {
+        // 蓝牙：显示已配对设备
+        Text("已配对设备:", fontSize = 10.sp, color = Color(0xFF80CBC4))
+        val paired = remember { cm.getBondedBtDevices() }
+        if (paired.isEmpty()) {
+            Text("无已配对设备", fontSize = 10.sp, color = Color(0xFF888888))
+        } else {
+            paired.forEach { dev ->
+                Surface(
+                    color = Color(0xFF2A2930), shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp).clickable {
+                        Thread { cm.connectTo(dev.address, TransportType.BLUETOOTH_RFCOMM) }.start()
+                    }
+                ) {
+                    Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Bluetooth, null, tint = Color(0xFF80CBC4), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(dev.name ?: dev.address, fontSize = 12.sp, color = Color.White, modifier = Modifier.weight(1f))
+                        Text("连接", fontSize = 10.sp, color = Color(0xFFCE93D8))
+                    }
+                }
+            }
+        }
+    }
+    if (connState == ConnectionState.CONNECTED) {
+        Button(
+            onClick = { cm.disconnect() },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB71C1C)),
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+        ) { Text("断开", fontSize = 12.sp) }
+    }
+}
+
+// ============================================================
 // 主 EQ 页面（HXAudio 风格）
 // ============================================================
 
 @Composable
-fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
+fun EqPage(
+    context: Context,
+    onOpenSettings: () -> Unit = {},
+    connectionManager: ConnectionManager = ConnectionManager(context),
+    micMode: MicMode = MicMode.LOCAL,
+    onMicModeChange: (MicMode) -> Unit = {},
+    connState: ConnectionState = ConnectionState.IDLE,
+    connectedDevice: PeerDevice? = null
+) {
     val prefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
     val appPrefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
-
-    // 首页模式（读取设置页保存的值）
-    var eqMode by remember { mutableStateOf(appPrefs.getInt("settings_mode", 1)) }
 
     var selectedPreset by remember { mutableIntStateOf(prefs.getInt("preset", 0)) }
     var gain by remember { mutableFloatStateOf(prefs.getFloat("gain", 0f)) }
@@ -592,10 +815,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             .putFloat("echo_delay", echoDelay).putFloat("echo_decay", echoDecay)
             .apply()
         NativeAudioProcessor.ensureLoaded()
-        if (bypass) {
-            AppLogger.d("EqPage", "save: 旁路中，跳过引擎推送")
-            return
-        }
+        if (bypass) return
         NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch,
             formant, distortion, echoDelay, echoDecay)
     }
@@ -637,25 +857,14 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             .padding(horizontal = 16.dp)
     ) {
         // ============================================================
-        // 顶部：标题 + 引擎 + 引擎健康 + 设置齿轮
+        // 顶部：标题 + 引擎 + 设置齿轮
         // ============================================================
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("MaidMic", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(6.dp))
-                    // 引擎健康指示灯
-                    val health = NativeAudioProcessor.getHealth()
-                    val (healthColor, healthIcon) = when (health) {
-                        EngineHealth.OK -> Color(0xFF4CAF50) to Icons.Default.CheckCircle
-                        EngineHealth.FALLBACK -> Color(0xFFFFA726) to Icons.Default.Warning
-                        EngineHealth.BROKEN -> Color.Red to Icons.Default.Error
-                    }
-                    Icon(healthIcon, null, tint = healthColor, modifier = Modifier.size(12.dp))
-                }
+                Text("MaidMic", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text(currentEngine.displayName, fontSize = 11.sp, color = Color(0xFFCE93D8))
             }
             // 设置齿轮（永久常驻）
@@ -664,24 +873,84 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             }
         }
 
+        Spacer(Modifier.height(6.dp))
+
         // ============================================================
-        // 权限状态指示（自动检测 root/shizuku）
+        // 模式选择 + 流式传输
         // ============================================================
-        var rootStat by remember { mutableStateOf<RootMicBridge.RootStatus?>(null) }
-        LaunchedEffect(Unit) { rootStat = RootMicBridge(context).checkRoot() }
-        val shizukuAvail = remember { checkShizukuStatus() }
-        Surface(color = Color(0xFF1E1E1E), shape = RoundedCornerShape(6.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                val (icon, label, color) = when {
-                    rootStat?.granted == true -> Triple(Icons.Default.CheckCircle, "Root 可用", Color(0xFF4CAF50))
-                    shizukuAvail -> Triple(Icons.Default.Security, "Shizuku 可用", Color(0xFF80CBC4))
-                    else -> Triple(Icons.Default.Info, "无特权 · 仅测试模式", Color(0xFF888888))
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = Color(0xFF1E3A2F)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                // 三模式切换
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("🎛️ 工作模式", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF80CBC4))
+                    Spacer(Modifier.weight(1f))
+                    MicMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = micMode == mode,
+                            onClick = {
+                                onMicModeChange(mode)
+                                if (mode == MicMode.LOCAL) {
+                                    connectionManager.disconnect()
+                                }
+                            },
+                            label = { Text(
+                                when (mode) {
+                                    MicMode.LOCAL -> "🔊 本地"
+                                    MicMode.SOURCE -> "🎤 发送"
+                                    MicMode.RECEIVER -> "📞 接收"
+                                },
+                                fontSize = 10.sp
+                            )},
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF00695C))
+                        )
+                        Spacer(Modifier.width(4.dp))
+                    }
                 }
-                Icon(icon, null, tint = color, modifier = Modifier.size(12.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(label, fontSize = 10.sp, color = color)
-                Spacer(Modifier.weight(1f))
-                Text("建议戴耳机使用", fontSize = 9.sp, color = Color(0xFF555555))
+
+                Spacer(Modifier.height(6.dp))
+
+                if (micMode == MicMode.LOCAL) {
+                    // 本地模式：用现有桥接
+                    Text("使用 Shizuku / Root / 无障碍 桥接", fontSize = 11.sp, color = Color(0xFF80CBC4))
+                    Text("兼容性最好，无需网络", fontSize = 10.sp, color = Color(0xFF888888))
+                } else {
+                    // 流式模式：传输方式选择
+                    var transport by remember { mutableStateOf(TransportType.WIFI_UDP) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("传输:", fontSize = 10.sp, color = Color(0xFF80CBC4))
+                        Spacer(Modifier.width(6.dp))
+                        FilterChip(
+                            selected = transport == TransportType.WIFI_UDP,
+                            onClick = { transport = TransportType.WIFI_UDP },
+                            label = { Text("📶 WiFi", fontSize = 10.sp) },
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF00897B))
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        FilterChip(
+                            selected = transport == TransportType.BLUETOOTH_RFCOMM,
+                            onClick = { transport = TransportType.BLUETOOTH_RFCOMM },
+                            label = { Text("🔵 蓝牙", fontSize = 10.sp) },
+                            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF00897B))
+                        )
+                    }
+
+                    Spacer(Modifier.height(6.dp))
+
+                    if (micMode == MicMode.SOURCE) {
+                        SOURCE端UI(connectionManager, transport, connState)
+                    } else {
+                        RECEIVER端UI(connectionManager, transport, connState, context)
+                    }
+
+                    Spacer(Modifier.height(4.dp))
+                    Text("状态: ${connState.name}", fontSize = 10.sp, color = Color(0xFF888888))
+                    connectedDevice?.let {
+                        Text("已连接: ${it.name} (${it.transport.name})", fontSize = 10.sp, color = Color(0xFF4CAF50))
+                    }
+                }
             }
         }
 
@@ -746,10 +1015,6 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                             NativeAudioProcessor.setEngine(AudioEngine.PASSTHROUGH)
                         } else {
                             NativeAudioProcessor.setEngine(currentEngine)
-                            // 关旁路时重新发参数（旁路期间改的滑块值要推给引擎）
-                            NativeAudioProcessor.setEqParams(gain, bass, treble, reverb, pitch,
-                                formant, distortion, echoDelay, echoDecay)
-                            AppLogger.i("EqPage", "旁路关闭，参数已重新推送")
                         }
                     },
                     modifier = Modifier.height(24.dp),
@@ -772,8 +1037,6 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
             Spacer(Modifier.height(8.dp))
         }
 
-        // 简单模式下隐藏 EQ 控件
-        if (eqMode >= 1) {
         // ============================================================
         // 主控件区 — 根据引擎模式
         // ============================================================
@@ -822,7 +1085,7 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                 Spacer(Modifier.height(14.dp))
 
                 // 快速滑块（紧凑）
-                EqSlider("增益", gain, -30f..30f) { gain = it; save() }
+                EqSlider("增益", gain, -10f..10f) { gain = it; save() }
                 EqSlider("低音", bass, -10f..10f) { bass = it; save() }
                 EqSlider("高音", treble, -10f..10f) { treble = it; save() }
 
@@ -881,93 +1144,12 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
                 }
             }
         }
-        } // 简单模式下隐藏 EQ 控件结束
 
         Spacer(Modifier.height(14.dp))
 
         // ============================================================
-        // 实时环回按钮（游戏/通话使用，非扬声器回放测试）
-        // ============================================================
-        var isLooping by remember { mutableStateOf(false) }
-        Surface(
-            onClick = {
-                if (!isLooping) {
-                    val hasMic = ContextCompat.checkSelfPermission(context,
-                        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-                    if (!hasMic) {
-                        Toast.makeText(context, "缺少录音权限", Toast.LENGTH_SHORT).show()
-                        return@Surface
-                    }
-                    isLooping = true
-                    AudioLoopback.start(context)
-                    Toast.makeText(context, "实时变声已启动（戴上耳机避免回声）", Toast.LENGTH_LONG).show()
-                    AppLogger.i("Loopback", "实时环回启动")
-                } else {
-                    isLooping = false
-                    AudioLoopback.stop(context)
-                    Toast.makeText(context, "实时变声已停止", Toast.LENGTH_SHORT).show()
-                    AppLogger.i("Loopback", "实时环回停止")
-                }
-            },
-            color = if (isLooping) Color(0xFF1A4A1A) else Color(0xFF2A2930),
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (isLooping) Icons.Default.FiberManualRecord else Icons.Default.PlayCircle,
-                    null,
-                    tint = if (isLooping) Color.Red else Color(0xFF80CBC4),
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(if (isLooping) "🟢 实时变声中..." else "🎤 启动实时变声",
-                        fontSize = 13.sp, color = Color.White)
-                    Text(if (isLooping) "音频环回运行中，戴耳机避免回声"
-                        else "游戏/通话中实时变声，戴上耳机使用",
-                        fontSize = 10.sp, color = Color(0xFF888888))
-                }
-                if (isLooping) {
-                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Color.Red)
-                }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-
-        // ============================================================
-        // AEC 开关 + 压缩机
-        // ============================================================
-        var aecOn by remember { mutableStateOf(true) }
-        var compThreshold by remember { mutableFloatStateOf(-20f) }
-        var compRatio by remember { mutableFloatStateOf(4f) }
-        var compMakeup by remember { mutableFloatStateOf(6f) }
-
-        Surface(color = Color(0xFF2A2930), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(10.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("回声消除 (AEC)", fontSize = 12.sp, color = Color.White, modifier = Modifier.weight(1f))
-                    Switch(checked = aecOn, onCheckedChange = {
-                        aecOn = it; AudioLoopback.setAecEnabled(it)
-                        val label = if (it) "开启" else "关闭"
-                        AppLogger.i("AEC", "AEC $label")
-                    }, modifier = Modifier.height(20.dp),
-                    colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8)))
-                }
-                // 压缩机
-                Text("动态压缩", fontSize = 12.sp, color = Color(0xFF888888))
-                EqSlider("阈值", compThreshold, -60f..0f) { compThreshold = it
-                    NativeAudioProcessor.setCompressor(compThreshold, compRatio, compMakeup) }
-                EqSlider("压缩比", compRatio, 1f..20f) { compRatio = it
-                    NativeAudioProcessor.setCompressor(compThreshold, compRatio, compMakeup) }
-                EqSlider("补偿增益", compMakeup, 0f..20f) { compMakeup = it
-                    NativeAudioProcessor.setCompressor(compThreshold, compRatio, compMakeup) }
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-
-        // ============================================================
-        // 测试变声按钮（仅用于效果验证，建议戴耳机）
+        // 测试变声按钮
+        // 测试变声按钮
         Surface(
             onClick = {
                 if (testState == TestState.IDLE) {
@@ -1035,104 +1217,9 @@ fun EqPage(context: Context, onOpenSettings: () -> Unit = {}) {
         }
 
         Spacer(Modifier.height(12.dp))
-
-        // ============================================================
-        // 可折叠高级音频设置（引擎 + 格式 + 缓冲）
-        // ============================================================
-        var showAdvanced by remember { mutableStateOf(true) }
-        Surface(
-            onClick = { showAdvanced = !showAdvanced },
-            color = Color(0xFF2A2930),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Tune, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("音频设置", fontSize = 13.sp, color = Color.White, modifier = Modifier.weight(1f))
-                Icon(if (showAdvanced) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null,
-                    tint = Color(0xFF888888), modifier = Modifier.size(18.dp))
-            }
-        }
-        if (showAdvanced) {
-            Spacer(Modifier.height(6.dp))
-            val audioPrefs = context.getSharedPreferences("maidmic_audio_params", Context.MODE_PRIVATE)
-            val advSampleRate = remember { mutableIntStateOf(audioPrefs.getInt("sample_rate", 48000)) }
-            val advBitDepth = remember { mutableIntStateOf(audioPrefs.getInt("bit_depth", 16)) }
-            val advChannels = remember { mutableIntStateOf(audioPrefs.getInt("channels", 2)) }
-            val advBitrate = remember { mutableIntStateOf(audioPrefs.getInt("bitrate", 192)) }
-            val advBufSize = remember { mutableIntStateOf(audioPrefs.getInt("buffer_size", 256)) }
-            val advFrameSize = remember { mutableIntStateOf(audioPrefs.getInt("frame_size", 1024)) }
-            val advOverlap = remember { mutableIntStateOf(audioPrefs.getInt("overlap_ratio", 50)) }
-            fun saveAd() {
-                audioPrefs.edit()
-                    .putInt("sample_rate", advSampleRate.intValue)
-                    .putInt("bit_depth", advBitDepth.intValue)
-                    .putInt("channels", advChannels.intValue)
-                    .putInt("bitrate", advBitrate.intValue)
-                    .putInt("buffer_size", advBufSize.intValue)
-                    .putInt("frame_size", advFrameSize.intValue)
-                    .putInt("overlap_ratio", advOverlap.intValue)
-                    .apply()
-            }
-            // 格式行
-            Text("格式", fontSize = 11.sp, color = Color(0xFFBBBBBB))
-            Spacer(Modifier.height(4.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(44100 to "44.1k", 48000 to "48k", 96000 to "96k").forEach { (v, l) ->
-                    FilterChip(selected = advSampleRate.intValue == v,
-                        onClick = { advSampleRate.intValue = v; saveAd() },
-                        label = { Text(l, fontSize = 10.sp) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(16 to "16bit", 24 to "24bit", 32 to "32Float").forEach { (v, l) ->
-                    FilterChip(selected = advBitDepth.intValue == v,
-                        onClick = { advBitDepth.intValue = v; saveAd() },
-                        label = { Text(l, fontSize = 10.sp) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
-                }
-                listOf(1 to "Mono", 2 to "Stereo").forEach { (v, l) ->
-                    FilterChip(selected = advChannels.intValue == v,
-                        onClick = { advChannels.intValue = v; saveAd() },
-                        label = { Text(l, fontSize = 10.sp) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            // 缓冲行
-            Text("缓冲", fontSize = 11.sp, color = Color(0xFFBBBBBB))
-            Spacer(Modifier.height(4.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(64, 128, 256, 512, 1024).forEach { v ->
-                    FilterChip(selected = advBufSize.intValue == v,
-                        onClick = { advBufSize.intValue = v; saveAd() },
-                        label = { Text("$v", fontSize = 10.sp) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(256 to "256w", 512 to "512w", 1024 to "1024w", 2048 to "2048w").forEach { (v, l) ->
-                    FilterChip(selected = advFrameSize.intValue == v,
-                        onClick = { advFrameSize.intValue = v; saveAd() },
-                        label = { Text(l, fontSize = 10.sp) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf(0 to "0%", 25 to "25%", 50 to "50%", 75 to "75%").forEach { (v, l) ->
-                    FilterChip(selected = advOverlap.intValue == v,
-                        onClick = { advOverlap.intValue = v; saveAd() },
-                        label = { Text(l, fontSize = 10.sp) },
-                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black))
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            val hop = (advFrameSize.intValue * (100 - advOverlap.intValue) / 100).coerceAtLeast(1)
-            Text("帧移: $hop 样本 · 延迟: ${advBufSize.intValue * 1000 / 48000}ms",
-                fontSize = 10.sp, color = Color(0xFF555555))
-        }
+        Text("授权和方案配置 → 关于页右上角设置",
+            fontSize = 10.sp, color = Color(0xFF444444),
+            modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
     }
 }
 
@@ -1251,15 +1338,34 @@ fun SettingsPage(
 ) {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
+    val audioPrefs = context.getSharedPreferences("maidmic_audio_params", Context.MODE_PRIVATE)
+
+    // === 音频格式参数 ===
+    var sampleRate by remember { mutableIntStateOf(audioPrefs.getInt("sample_rate", 48000)) }
+    var bitDepth by remember { mutableIntStateOf(audioPrefs.getInt("bit_depth", 16)) }
+    var channels by remember { mutableIntStateOf(audioPrefs.getInt("channels", 2)) }
+    var bitrate by remember { mutableIntStateOf(audioPrefs.getInt("bitrate", 192)) }
+    var encoderMode by remember { mutableIntStateOf(audioPrefs.getInt("encoder_mode", 0)) }
+
+    // === 缓冲与处理参数 ===
+    var bufferSize by remember { mutableIntStateOf(audioPrefs.getInt("buffer_size", 256)) }
+    var frameSize by remember { mutableIntStateOf(audioPrefs.getInt("frame_size", 1024)) }
+    var overlapRatio by remember { mutableIntStateOf(audioPrefs.getInt("overlap_ratio", 50)) }
 
     // === 引擎 ===
     var currentEngine by remember { mutableStateOf(NativeAudioProcessor.getEngine()) }
 
-    // === 设置模式（持久化到 prefs）===
-    var settingsMode by remember { mutableIntStateOf(prefs.getInt("settings_mode", 1)) }
-    fun saveMode(mode: Int) {
-        settingsMode = mode
-        prefs.edit().putInt("settings_mode", mode).apply()
+    fun saveAudioParams() {
+        audioPrefs.edit()
+            .putInt("sample_rate", sampleRate)
+            .putInt("bit_depth", bitDepth)
+            .putInt("channels", channels)
+            .putInt("bitrate", bitrate)
+            .putInt("encoder_mode", encoderMode)
+            .putInt("buffer_size", bufferSize)
+            .putInt("frame_size", frameSize)
+            .putInt("overlap_ratio", overlapRatio)
+            .apply()
     }
 
     Column(
@@ -1277,16 +1383,16 @@ fun SettingsPage(
         Spacer(Modifier.height(16.dp))
 
         // ============================================================
-        // 设置模式选择（持久化，影响首页复杂度）
+        // 首页模式（控制界面复杂度）
         // ============================================================
-        var sm by remember { mutableIntStateOf(settingsMode) }
+        var settingsMode by remember { mutableIntStateOf(prefs.getInt("settings_mode", 1)) }
         Text("首页模式", fontSize = 12.sp, color = Color(0xFF888888))
         Spacer(Modifier.height(4.dp))
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(0 to "简单", 1 to "基础", 2 to "大师").forEach { (idx, label) ->
                 FilterChip(
-                    selected = sm == idx,
-                    onClick = { sm = idx; saveMode(idx) },
+                    selected = settingsMode == idx,
+                    onClick = { settingsMode = idx; prefs.edit().putInt("settings_mode", idx).apply() },
                     label = { Text(label, fontSize = 12.sp) },
                     modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
@@ -1296,7 +1402,7 @@ fun SettingsPage(
         }
         Spacer(Modifier.height(4.dp))
         Text(
-            when (sm) {
+            when (settingsMode) {
                 0 -> "仅基础控制，适合快速使用"
                 1 -> "完整EQ/效果/音频参数"
                 else -> "全部功能+开发者选项"
@@ -1305,7 +1411,190 @@ fun SettingsPage(
         Spacer(Modifier.height(16.dp))
 
         // ============================================================
-        // 音频方案（所有模式都显示）
+        // 音频格式（采样率/位深度/声道数/比特率）
+        // ============================================================
+        Text("音频格式", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+
+        // 采样率
+        AudioParamRow(label = "采样率", value = when(sampleRate) {
+            44100 -> "44.1 kHz"
+            48000 -> "48 kHz"
+            96000 -> "96 kHz"
+            else -> "${sampleRate/1000} kHz"
+        }) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                listOf(44100, 48000, 96000).forEach { rate ->
+                    FilterChip(
+                        selected = sampleRate == rate,
+                        onClick = { sampleRate = rate; saveAudioParams() },
+                        label = { Text("${rate/1000}k", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 位深度
+        AudioParamRow(label = "位深度", value = when(bitDepth) {
+            16 -> "16-bit Int"
+            24 -> "24-bit Int"
+            32 -> "32-bit Float"
+            else -> "$bitDepth-bit"
+        }) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(16 to "16bit", 24 to "24bit", 32 to "32 Float").forEach { (depth, lbl) ->
+                    FilterChip(
+                        selected = bitDepth == depth,
+                        onClick = { bitDepth = depth; saveAudioParams() },
+                        label = { Text(lbl, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 声道数
+        AudioParamRow(label = "声道数", value = if (channels == 1) "单声道" else "立体声") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(1 to "单声道", 2 to "立体声").forEach { (cnt, lbl) ->
+                    FilterChip(
+                        selected = channels == cnt,
+                        onClick = { channels = cnt; saveAudioParams() },
+                        label = { Text(lbl, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 比特率
+        AudioParamRow(label = "比特率", value = "${bitrate} kbps") {
+            Slider(
+                value = bitrate.toFloat(),
+                onValueChange = { bitrate = it.toInt(); saveAudioParams() },
+                valueRange = 64f..320f, steps = 15,
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(thumbColor = Color(0xFFCE93D8), activeTrackColor = Color(0xFFCE93D8))
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // 缓冲与处理（缓冲区/帧长度/重叠率）
+        // ============================================================
+        Text("缓冲与处理", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+
+        // 缓冲区大小
+        val bufLatencyMs = bufferSize * 1000 / sampleRate
+        AudioParamRow(label = "缓冲区大小", value = "${bufferSize} 样本 (~${bufLatencyMs}ms)") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                listOf(64, 128, 256, 512, 1024).forEach { size ->
+                    FilterChip(
+                        selected = bufferSize == size,
+                        onClick = { bufferSize = size; saveAudioParams() },
+                        label = { Text("$size", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 帧长度/窗长
+        AudioParamRow(label = "帧长度 (窗长)", value = "$frameSize 点") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                listOf(256, 512, 1024, 2048).forEach { size ->
+                    FilterChip(
+                        selected = frameSize == size,
+                        onClick = { frameSize = size; saveAudioParams() },
+                        label = { Text("$size", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                when (frameSize) {
+                    256 -> "高时间分辨率，适合快速变化信号"
+                    512 -> "均衡时频分辨率"
+                    1024 -> "标准 FFT 窗，频率精度好"
+                    else -> "高频率分辨率，适合稳态信号"
+                }, fontSize = 10.sp, color = Color(0xFF666666)
+            )
+        }
+
+        // 重叠率 + 帧移联动显示
+        AudioParamRow(label = "重叠率", value = "$overlapRatio%") {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(0, 25, 50, 75).forEach { ratio ->
+                    FilterChip(
+                        selected = overlapRatio == ratio,
+                        onClick = { overlapRatio = ratio; saveAudioParams() },
+                        label = { Text("$ratio%", fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+        }
+
+        // 帧移（只读，自动计算）
+        val hopSize = (frameSize * (100 - overlapRatio) / 100).coerceAtLeast(1)
+        AudioParamRow(label = "帧移 (Hop Size)", value = "$hopSize 点（自动）") {
+            Text("← 由帧长度与重叠率决定", fontSize = 10.sp, color = Color(0xFF555555))
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // 编码选项（CBR/VBR/ABR）
+        // ============================================================
+        Text("编码选项", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
+        Spacer(Modifier.height(8.dp))
+
+        AudioParamRow(
+            label = "码率控制",
+            value = when (encoderMode) { 0 -> "CBR 固定"; 1 -> "VBR 可变"; else -> "ABR 平均" }
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf(0 to "CBR", 1 to "VBR", 2 to "ABR").forEach { (idx, lbl) ->
+                    FilterChip(
+                        selected = encoderMode == idx,
+                        onClick = { encoderMode = idx; saveAudioParams() },
+                        label = { Text(lbl, fontSize = 11.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = Color(0xFFCE93D8), selectedLabelColor = Color.Black
+                        )
+                    )
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                when (encoderMode) {
+                    0 -> "固定比特率，文件大小可控"
+                    1 -> "可变比特率，空间效率高"
+                    else -> "平均比特率，折中方案"
+                }, fontSize = 10.sp, color = Color(0xFF666666)
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        // ============================================================
+        // 音频方案（保留原有权限配置）
         // ============================================================
         Text("音频方案", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
@@ -1333,7 +1622,98 @@ fun SettingsPage(
         Spacer(Modifier.height(20.dp))
 
         // ============================================================
-        // 音频引擎（所有模式都显示）
+        // 流式传输
+        // ============================================================
+        Surface(color = Color(0xFF1E1E1E), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Text("📡 双设备流式传输", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFF80CBC4))
+                Spacer(Modifier.height(4.dp))
+                Text("麦克风端: 采集→DSP→发送到接收端", fontSize = 11.sp, color = Color(0xFF888888))
+                Text("接收端: 接收→注入系统→其他App使用", fontSize = 11.sp, color = Color(0xFF888888))
+                Spacer(Modifier.height(8.dp))
+
+                val cm = remember { ConnectionManager(context) }
+                var cmMode by remember { mutableStateOf(MicMode.RECEIVER) }
+                var cmIp by remember { mutableStateOf("") }
+
+                FilterChip(
+                    selected = cmMode == MicMode.SOURCE,
+                    onClick = { cmMode = MicMode.SOURCE },
+                    label = { Text("🎤 麦克风端", fontSize = 11.sp) }
+                )
+                Spacer(Modifier.height(4.dp))
+                FilterChip(
+                    selected = cmMode == MicMode.RECEIVER,
+                    onClick = { cmMode = MicMode.RECEIVER },
+                    label = { Text("📞 接收端", fontSize = 11.sp) }
+                )
+
+                Spacer(Modifier.height(6.dp))
+
+                if (cmMode == MicMode.SOURCE) {
+                    Text("本机IP: ${cm.getLocalIpAddress()}", fontSize = 11.sp, color = Color(0xFF80CBC4))
+                    Button(
+                        onClick = { Thread { cm.startServer(); cm.waitForPeer() }.start() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00695C)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("启动服务", fontSize = 12.sp) }
+                } else {
+                    OutlinedTextField(
+                        value = cmIp, onValueChange = { cmIp = it },
+                        label = { Text("麦克风IP", fontSize = 10.sp) },
+                        singleLine = true, modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = { Thread { cm.connectTo(cmIp) }.start() },
+                        enabled = cmIp.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00695C)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("连接", fontSize = 12.sp) }
+                }
+
+                Spacer(Modifier.height(6.dp))
+                Text("状态: ${cm.state}", fontSize = 10.sp, color = Color(0xFF888888))
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // Shizuku 状态 + 隐藏最近任务
+        // ============================================================
+        Surface(color = Color(0xFF1E1E1E), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Shizuku: ", fontSize = 11.sp, color = Color(0xFF666666))
+                    val s = ShizukuStatus.state
+                    Text(
+                        when (s) {
+                            ShizukuState.READY -> "✓ 已就绪"
+                            ShizukuState.UNAUTHORIZED -> "✗ 未授权"
+                            ShizukuState.UNAVAILABLE -> "✗ 不可用"
+                        },
+                        fontSize = 11.sp,
+                        color = if (s == ShizukuState.READY) Color(0xFF4CAF50) else Color(0xFFFF6B6B)
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                var hideRecents by remember { mutableStateOf(prefs.getBoolean("hide_recents", false)) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.VisibilityOff, null, tint = Color(0xFFCE93D8), modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("隐藏最近任务", fontSize = 12.sp, color = Color.White, modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = hideRecents,
+                        onCheckedChange = { hide -> hideRecents = hide; prefs.edit().putBoolean("hide_recents", hide).apply() },
+                        colors = SwitchDefaults.colors(checkedTrackColor = Color(0xFFCE93D8))
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+
+        // ============================================================
+        // 音频引擎
         // ============================================================
         Text("音频引擎", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
@@ -1389,16 +1769,14 @@ fun SettingsPage(
         Spacer(Modifier.height(20.dp))
 
         // ============================================================
-        // 其他（开发者选项 — 大师模式）
+        // 其他（开发者选项）
         // ============================================================
-        if (sm >= 2) {
         Text("其他", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = Color(0xFFBBBBBB))
         Spacer(Modifier.height(8.dp))
         SettingsCard(icon = Icons.Default.DeveloperMode, title = "开发者选项", desc = "高级功能 · 谨慎操作") {
             onOpenDeveloperSettings()
         }
-        Spacer(Modifier.height(40.dp))
-        }
+        Spacer(Modifier.height(40.dp)) // 底部留白
     }
 }
 
@@ -1483,7 +1861,7 @@ fun AboutPage(
             }
         }
 
-        // 应用图标（11次进开发者页）
+        // 应用图标（11次进开发者）
         Box(
             modifier = Modifier.size(80.dp).clip(CircleShape).background(Color(0xFFCE93D8))
                 .clickable {
@@ -1709,13 +2087,6 @@ private fun startVoiceTest(
 
         val totalSize = processed.sumOf { it.size }
 
-        // 用 getMinBufferSize 计算最佳播放缓冲
-        val playBufferSize = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        ).coerceAtLeast(bufferSize)
-
         val track = try {
             AudioTrack.Builder()
                 .setAudioAttributes(android.media.AudioAttributes.Builder()
@@ -1727,7 +2098,7 @@ private fun startVoiceTest(
                     .setSampleRate(sampleRate)
                     .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                     .build())
-                .setBufferSizeInBytes(playBufferSize)
+                .setBufferSizeInBytes(bufferSize)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .build()
         } catch (e: Exception) {
@@ -1754,3 +2125,5 @@ private fun startVoiceTest(
         onStateChange(TestState.IDLE)
     }.start()
 }
+
+
