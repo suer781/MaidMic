@@ -33,6 +33,7 @@ object AudioLoopback {
     private var audioTrack: AudioTrack? = null
     private var echoCanceler: AcousticEchoCanceler? = null
     private var savedAudioMode: Int = AudioManager.MODE_NORMAL
+    private val lock = Any()
 
     fun theoreticalLatencyMs(): Int = (bufferFrames * 1000) / SAMPLE_RATE
     fun setBufferFrames(frames: Int) { bufferFrames = frames.coerceIn(64, 1024) }
@@ -118,13 +119,16 @@ object AudioLoopback {
 
     fun stop(context: Context) {
         isRunning = false
-        recordThread?.join(1000)
+        recordThread?.interrupt()
+        recordThread?.join(3000)
         recordThread = null
-        try { audioRecord?.stop() } catch (_: Exception) {}
-        try { audioTrack?.stop() } catch (_: Exception) {}
-        audioRecord?.release(); audioRecord = null
-        audioTrack?.release(); audioTrack = null
-        echoCanceler?.release(); echoCanceler = null
+        synchronized(lock) {
+            try { audioRecord?.stop() } catch (_: Exception) {}
+            try { audioTrack?.stop() } catch (_: Exception) {}
+            audioRecord?.release(); audioRecord = null
+            audioTrack?.release(); audioTrack = null
+            echoCanceler?.release(); echoCanceler = null
+        }
         try {
             val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             am.mode = savedAudioMode
@@ -135,11 +139,15 @@ object AudioLoopback {
     private fun processingLoop(bufSizeBytes: Int) {
         val inputBuf = ByteArray(bufSizeBytes)
         val outputBuf = ByteArray(bufSizeBytes)
-        while (isRunning) {
-            val read = audioRecord?.read(inputBuf, 0, bufSizeBytes) ?: -1
-            if (read <= 0) { Thread.sleep(1); continue }
+        while (isRunning && !Thread.currentThread().isInterrupted) {
+            val rec: AudioRecord?
+            val trk: AudioTrack?
+            synchronized(lock) { rec = audioRecord; trk = audioTrack }
+            if (rec == null || trk == null) break
+            val read = try { rec.read(inputBuf, 0, bufSizeBytes) } catch (_: Exception) { -1 }
+            if (read <= 0) { if (isRunning) Thread.sleep(1); continue }
             NativeAudioProcessor.processAudio(inputBuf, outputBuf, read)
-            audioTrack?.write(outputBuf, 0, read)
+            try { trk.write(outputBuf, 0, read) } catch (_: Exception) { break }
         }
     }
 }
