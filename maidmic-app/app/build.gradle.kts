@@ -105,6 +105,10 @@ dependencies {
     // LuaJ — Lua 插件运行时
     implementation("org.luaj:luaj-jse:3.0.1")
 
+    // ZXing — 二维码生成+扫描
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+
     // 测试
     testImplementation("junit:junit:4.13.2")
 }
