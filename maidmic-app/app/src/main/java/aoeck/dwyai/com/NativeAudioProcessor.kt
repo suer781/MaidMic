@@ -251,7 +251,7 @@ object NativeAudioProcessor {
             return
         }
 
-        AppLogger.i("Engine", "setEqParams: gain=$g bass=$b bass=$t reverb=$r pitch=$p formant=$f dist=$d echo=${ed}ms decay=$ec")
+        AppLogger.i("Engine", "setEqParams: gain=$g bass=$b treble=$t reverb=$r pitch=$p formant=$f dist=$d echo=${ed}ms decay=$ec")
         nativeSetEqParams(g, b, t, r, p, f, d, ed, ec)
     }
 
