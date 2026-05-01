@@ -4,10 +4,12 @@
   ============================================================
   声明所有的 Activity、Service、权限。
   
-  三路虚拟麦克风各自需要一个 Service：
-    - MaidMicRootService:  方案A (root AudioFlinger)
-    - MaidMicShizukuService: 方案B (Shizuku AAudio)
-    - MaidMicAccessibilityService: 方案C (无障碍)
+  架构路线：三路桥接（Shizuku/Root/无障碍）+ 双设备流式传输
+  
+  - Shizuku: 无需Root，通过Shizuku API拦截AudioRecord
+  - Root: 需要Root/Magisk，更底层音频访问
+  - 无障碍: 通过AccessibilityService桥接
+  - 流式传输: 两台设备共存，A采集DSP→WiFi→B接收注入系统
   
   权限说明：
     - RECORD_AUDIO: 必须，用于捕获麦克风输入
@@ -25,6 +27,22 @@
     <!-- 录音权限（麦克风输入） — 核心权限 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- WiFi / 网络权限（双设备流式传输） -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+
+    <!-- 蓝牙权限（流式传输） -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="28" />
+
     <!-- 前台服务（Android 8+ 后台音频处理需要） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
@@ -35,10 +53,6 @@
 
     <!-- 修改音频设置（方案A root 模式可能需要） -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-
-    <!-- 网络（插件市场下载、P2P） -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Shizuku 权限 -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
@@ -131,4 +145,14 @@
             android:foregroundServiceType="specialUse" />
 
     </application>
+
+    <!-- 查询已安装应用（沙箱模式备用方案） -->
+    <queries>
+        <package android:name="com.tencent.mm" />
+        <package android:name="com.netease.party" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+    </queries>
+
 </manifest>
