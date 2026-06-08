@@ -66,6 +66,7 @@ import aoeck.dwyai.com.ui.editor.PipelineNode
 import aoeck.dwyai.com.ui.CreditsPage
 import aoeck.dwyai.com.ui.settings.developer.DeveloperSettingsPage
 import aoeck.dwyai.com.bridge.root.RootMicBridge
+import aoeck.dwyai.com.bridge.mediaprojection.MediaProjectionBridge
 import aoeck.dwyai.com.streaming.ConnectionManager
 import aoeck.dwyai.com.streaming.ConnectionState
 import aoeck.dwyai.com.streaming.MicMode
@@ -97,13 +98,21 @@ private const val KEY_DEV_MODE = "dev_mode"
 private const val KEY_UGC_ENABLED = "ugc_enabled"
 
 class MainActivity : ComponentActivity() {
+    private lateinit var mediaProjectionBridge: MediaProjectionBridge
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        mediaProjectionBridge = MediaProjectionBridge(this)
         setContent {
             MaidMicTheme {
                 MaidMicMain(context = this@MainActivity)
             }
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        mediaProjectionBridge.onActivityResult(requestCode, resultCode, data)
     }
 
     override fun onStop() {
@@ -515,6 +524,33 @@ fun OnboardingPage(context: Context, onDone: () -> Unit) {
             // 方案C: 无障碍服务
             MicModeCard("方案C: 无障碍服务", "最兼容 · 无需额外权限", Icons.Default.Visibility) {
                 context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // 方案D: MediaProjection
+            MicModeCard(
+                "方案D: MediaProjection 屏幕共享",
+                "Android 10+ · 捕获系统音频",
+                Icons.Default.ScreenShare
+            ) {
+                val bridge = MediaProjectionBridge(context)
+                if (context is ComponentActivity) {
+                    bridge.requestMediaProjectionPermission(context)
+                } else {
+                    Toast.makeText(context, "需要在 Activity 中使用", Toast.LENGTH_SHORT).show()
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+
+            // 方案E: 输入法挂载
+            MicModeCard(
+                "方案E: 输入法挂载",
+                "持久后台运行 · 需要启用输入法",
+                Icons.Default.Keyboard
+            ) {
+                val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+                context.startActivity(intent)
+                Toast.makeText(context, "请启用 MaidMic 输入法", Toast.LENGTH_SHORT).show()
             }
 
             Spacer(Modifier.height(24.dp))

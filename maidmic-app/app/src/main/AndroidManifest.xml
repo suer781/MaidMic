@@ -64,6 +64,9 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- MediaProjection 权限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+
     <!-- ============================================================
          Application
          ============================================================ -->
@@ -134,6 +137,31 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- ============================================================
+             方案 D: MediaProjection 屏幕共享音频捕获
+             通过 MediaProjection API 捕获系统音频进行处理
+             ============================================================ -->
+        <service
+            android:name=".bridge.mediaprojection.MediaProjectionAudioService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|microphone" />
+
+        <!-- ============================================================
+             方案 E: 输入法挂载
+             通过自定义输入法实现音频处理和注入
+             ============================================================ -->
+        <service
+            android:name=".bridge.ime.MaidMicInputMethodService"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
         </service>
 
         <!-- ============================================================
