@@ -4,10 +4,9 @@
   ============================================================
   声明所有的 Activity、Service、权限。
   
-  架构路线：三路桥接（Shizuku/Root/无障碍）+ 双设备流式传输
+  架构路线：三路桥接（Shizuku/无障碍）+ 双设备流式传输
   
   - Shizuku: 无需Root，通过Shizuku API拦截AudioRecord
-  - Root: 需要Root/Magisk，更底层音频访问
   - 无障碍: 通过AccessibilityService桥接
   - 流式传输: 两台设备共存，A采集DSP→WiFi→B接收注入系统
   
@@ -15,6 +14,7 @@
     - RECORD_AUDIO: 必须，用于捕获麦克风输入
     - FOREGROUND_SERVICE: 必须，后台音频处理需要前台通知
     - BIND_ACCESSIBILITY_SERVICE: 方案C需要
+    - REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: 引导页"后台保活"（电池优化白名单）
     - 其他 Shizuku 相关权限
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -51,7 +51,10 @@
     <!-- 通知权限（Android 13+） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- 修改音频设置（方案A root 模式可能需要） -->
+    <!-- 保活权限：允许加入电池优化白名单（引导页"后台保活"） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- 修改音频设置 -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- Shizuku 权限 -->
@@ -63,6 +66,12 @@
     <!-- 读取外部存储（导入/导出预设） -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+
+    <!-- 悬浮窗权限（Task 7: 悬浮球 Service 需要 SYSTEM_ALERT_WINDOW） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- 震动权限（Task 9: 悬浮球长按触发时震动反馈） -->
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- ============================================================
          Application
@@ -94,16 +103,6 @@
         </activity>
 
         <!-- ============================================================
-             方案 A: Root (Magisk) 虚拟麦克风
-             AudioRecord + Engine 处理 + AudioTrack 环回输出
-             利用 root 权限提升进程优先级 (SCHED_FIFO)
-             ============================================================ -->
-        <service
-            android:name=".bridge.root.RootMicService"
-            android:exported="false"
-            android:foregroundServiceType="microphone" />
-
-        <!-- ============================================================
              方案 B: Shizuku AAudio 服务
              通过 Shizuku API 提升权限
              ============================================================ -->
@@ -119,6 +118,17 @@
             android:enabled="true"
             android:exported="true"
             android:multiprocess="false" />
+
+        <!-- FileProvider（Task 7: voicepacks 文件分享） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <!-- ============================================================
              方案 C: 无障碍服务
@@ -143,6 +153,15 @@
             android:name=".MaidMicKeepAliveService"
             android:exported="false"
             android:foregroundServiceType="specialUse" />
+
+        <!-- ============================================================
+             悬浮球前台服务（Task 7: 仅骨架，View 挂载见 Task 8）
+             默认关闭，需用户主动开启
+             ============================================================ -->
+        <service
+            android:name=".floating.FloatingBallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
 
     </application>
 

@@ -72,40 +72,73 @@ data class DspParam(
 
 enum class ParamType { FLOAT, INT, BOOL, STRING }
 
-/** 内置 DSP 模块列表 */
+// ============================================================
+// 内置 DSP 模块列表
+// ============================================================
+// 模块 ID 与 maidmic-engine/include/maidmic/module.h 完全对齐。
+// 仅保留 native 实际实现的 9 个模块（lookup_module_by_id 中存在的）。
+// Chorus(6)/Delay(8)/NoiseGate(9)/Limiter(10)/EQ(2) 未在 native 实现，已移除。
 val BUILTIN_MODULES = listOf(
-    DspModuleInfo(1,  "Gain",       "Adjust volume level. No limits.", "🔊"),
-    DspModuleInfo(2,  "EQ",         "Equalizer — shape your frequency response.", "🎛"),
-    DspModuleInfo(3,  "Compressor",  "Dynamic range compression.", "📉"),
-    DspModuleInfo(4,  "Pitch Shift", "Change pitch without changing speed (PSOLA).", "🎵"),
-    DspModuleInfo(5,  "Reverb",     "Add spatial ambience.", "🌊"),
-    DspModuleInfo(6,  "Chorus",     "Thicken your voice with chorus effect.", "🎤"),
-    DspModuleInfo(7,  "Distortion", "Add grit and warmth.", "🔥"),
-    DspModuleInfo(8,  "Delay",      "Echo effect with feedback control.", "⏳"),
-    DspModuleInfo(9,  "Noise Gate",  "Silence when you're not speaking.", "🚪"),
-    DspModuleInfo(10, "Limiter",    "Brick-wall protection for your ears.", "🛡"),
+    DspModuleInfo(1,  "Gain",        "调整音量增益。", "🔊"),
+    DspModuleInfo(3,  "Compressor",  "动态范围压缩。", "📉"),
+    DspModuleInfo(4,  "Pitch Shift", "变调（PSOLA，半音单位）。", "🎵"),
+    DspModuleInfo(5,  "Reverb",      "空间混响。", "🌊"),
+    DspModuleInfo(7,  "Distortion",  "失真效果。", "🔥"),
+    DspModuleInfo(11, "Bass",        "低音 Shelving 滤波。", "🔈"),
+    DspModuleInfo(12, "Treble",      "高音 Shelving 滤波。", "🔉"),
+    DspModuleInfo(13, "Formant",     "共振峰偏移。", "🗣"),
+    DspModuleInfo(14, "Echo",        "回声/延迟。", "⏳"),
 )
 
+/** 按 ID 查找内置模块信息 */
+fun findModuleById(id: Int): DspModuleInfo? = BUILTIN_MODULES.find { it.id == id }
+
+// ============================================================
 // 每个模块的默认参数（供新建时使用）
+// ============================================================
+// 参数 key 与 C++ 端 set_eq_params / set_compressor_params 完全对齐：
+//   Gain: gain_db
+//   Compressor: comp_threshold / comp_ratio / comp_makeup
+//   Bass: bass_db
+//   Treble: treble_db
+//   Reverb: reverb_mix
+//   Pitch: pitch_semitones
+//   Formant: formant_shift
+//   Distortion: distortion
+//   Echo: echo_delay_ms / echo_decay
+// bypass 不作为参数项（由卡片头部旁路开关单独控制）。
 fun getDefaultParams(moduleId: Int): MutableList<DspParam> = when (moduleId) {
     1 -> mutableListOf(   // Gain
-        DspParam("gain_db", "Gain", ParamType.FLOAT, 0f, -60f, 60f, "dB"),
-        DspParam("bypass", "Bypass", ParamType.BOOL, 0f, 0f, 1f, ""),
+        DspParam("gain_db", "增益 Gain", ParamType.FLOAT, 0f, -60f, 60f, "dB"),
+    )
+    3 -> mutableListOf(   // Compressor
+        DspParam("comp_threshold", "阈值 Threshold", ParamType.FLOAT, -20f, -60f, 0f, "dB"),
+        DspParam("comp_ratio", "压缩比 Ratio", ParamType.FLOAT, 2f, 1f, 20f, ":1"),
+        DspParam("comp_makeup", "补偿增益 Makeup", ParamType.FLOAT, 0f, 0f, 20f, "dB"),
     )
     4 -> mutableListOf(   // Pitch Shift
-        DspParam("semitones", "Semitones", ParamType.FLOAT, 0f, -24f, 24f, "st"),
-        DspParam("formant", "Formant Shift", ParamType.FLOAT, 0f, -12f, 12f, "st"),
-        DspParam("bypass", "Bypass", ParamType.BOOL, 0f, 0f, 1f, ""),
+        DspParam("pitch_semitones", "半音 Semitones", ParamType.FLOAT, 0f, -12f, 12f, "st"),
     )
     5 -> mutableListOf(   // Reverb
-        DspParam("room_size", "Room Size", ParamType.FLOAT, 0.5f, 0f, 1f, "%"),
-        DspParam("decay", "Decay", ParamType.FLOAT, 0.3f, 0f, 10f, "s"),
-        DspParam("wet", "Wet Mix", ParamType.FLOAT, 0.3f, 0f, 1f, "%"),
-        DspParam("bypass", "Bypass", ParamType.BOOL, 0f, 0f, 1f, ""),
+        DspParam("reverb_mix", "湿度 Mix", ParamType.FLOAT, 0f, 0f, 1f, ""),
     )
-    else -> mutableListOf(
-        DspParam("bypass", "Bypass", ParamType.BOOL, 0f, 0f, 1f, ""),
+    7 -> mutableListOf(   // Distortion
+        DspParam("distortion", "失真量 Drive", ParamType.FLOAT, 0f, 0f, 1f, ""),
     )
+    11 -> mutableListOf(  // Bass
+        DspParam("bass_db", "低音 Bass", ParamType.FLOAT, 0f, -10f, 10f, "dB"),
+    )
+    12 -> mutableListOf(  // Treble
+        DspParam("treble_db", "高音 Treble", ParamType.FLOAT, 0f, -10f, 10f, "dB"),
+    )
+    13 -> mutableListOf(  // Formant
+        DspParam("formant_shift", "共振峰 Formant", ParamType.FLOAT, 0f, -12f, 12f, "st"),
+    )
+    14 -> mutableListOf(  // Echo
+        DspParam("echo_delay_ms", "延迟 Delay", ParamType.FLOAT, 0f, 0f, 2000f, "ms"),
+        DspParam("echo_decay", "衰减 Decay", ParamType.FLOAT, 0f, 0f, 0.9f, ""),
+    )
+    else -> mutableListOf()
 }
 
 // ============================================================
@@ -115,20 +148,20 @@ fun getDefaultParams(moduleId: Int): MutableList<DspParam> = when (moduleId) {
 
 /**
  * 模块链编辑器
- * 
+ *
  * @param isDagMode 当前是否为 DAG 模式（在开发者选项中切换）
  * @param nodes 当前管线中的模块节点列表
- * @param onAddModule 用户点击"添加模块"按钮
- * @param onRemoveModule 用户移除一个模块
- * @param onReorderModule 用户重新排序模块
- * @param onToggleBypass 用户切换旁路开关
- * @param onParamChange 用户改变了某个参数
+ * @param onAddModule 用户选择添加某个模块（参数为模块 ID，对齐 module.h）
+ * @param onRemoveModule 用户移除一个模块（参数为节点 nodeId）
+ * @param onReorderModule 用户重新排序模块（fromIndex, toIndex）
+ * @param onToggleBypass 用户切换旁路开关（参数为节点 nodeId）
+ * @param onParamChange 用户改变了某个参数（nodeId, key, value）
  */
 @Composable
 fun ModuleChainEditor(
     isDagMode: Boolean,
     nodes: List<PipelineNode>,
-    onAddModule: () -> Unit,
+    onAddModule: (Int) -> Unit,
     onRemoveModule: (Int) -> Unit,
     onReorderModule: (Int, Int) -> Unit,  // fromIndex, toIndex
     onToggleBypass: (Int) -> Unit,
@@ -164,12 +197,26 @@ fun ModuleChainEditor(
 @Composable
 fun SimpleEditor(
     nodes: List<PipelineNode>,
-    onAddModule: () -> Unit,
+    onAddModule: (Int) -> Unit,
     onRemoveModule: (Int) -> Unit,
     onReorderModule: (Int, Int) -> Unit,
     onToggleBypass: (Int) -> Unit,
     onParamChange: (Int, String, Float) -> Unit
 ) {
+    // 添加模块对话框状态
+    var showAddDialog by remember { mutableStateOf(false) }
+
+    // 添加模块对话框
+    if (showAddDialog) {
+        AddModuleDialog(
+            onSelect = { moduleId ->
+                showAddDialog = false
+                onAddModule(moduleId)
+            },
+            onDismiss = { showAddDialog = false }
+        )
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -228,14 +275,14 @@ fun SimpleEditor(
         // 添加模块按钮
         item {
             OutlinedButton(
-                onClick = onAddModule,
+                onClick = { showAddDialog = true },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 8.dp)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Add")
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Add Module")
+                Text("添加模块 Add Module")
             }
         }
     }
@@ -483,6 +530,47 @@ fun ParamSlider(
 }
 
 // ============================================================
+// 添加模块对话框
+// Add Module Dialog
+// ============================================================
+// 弹出内置模块列表供用户选择，选择后回调 onAddModule(moduleId)。
+@Composable
+fun AddModuleDialog(
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加模块") },
+        text = {
+            Column {
+                BUILTIN_MODULES.forEach { module ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect(module.id) }
+                            .padding(vertical = 8.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(module.icon, fontSize = 22.sp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(module.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text(module.description, fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+// ============================================================
 // DAG 模式编辑器（占位）
 // DAG Mode Editor (placeholder)
 // ============================================================
@@ -501,7 +589,7 @@ fun ParamSlider(
 @Composable
 fun DagEditor(
     nodes: List<PipelineNode>,
-    onAddModule: () -> Unit,
+    onAddModule: (Int) -> Unit,
     onRemoveModule: (Int) -> Unit,
     onToggleBypass: (Int) -> Unit,
     onParamChange: (Int, String, Float) -> Unit

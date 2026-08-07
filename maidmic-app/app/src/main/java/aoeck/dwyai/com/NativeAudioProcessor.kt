@@ -12,50 +12,9 @@ package aoeck.dwyai.com
 import android.content.SharedPreferences
 import android.util.Log
 
-// ============================================================
-// 频响曲线预设（借鉴 HXAudio/HubeRSoundX 的 HxCore 算法）
-// ============================================================
-data class FreqCurvePreset(
-    val name: String,
-    val description: String,
-    val bands: FloatArray,
-    val preRender: FloatArray? = null
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is FreqCurvePreset) return false
-        return name == other.name
-    }
-    override fun hashCode() = name.hashCode()
-}
-
-object CurvePresets {
-    val STANDARD_FREQS = floatArrayOf(31f, 62f, 125f, 250f, 500f, 1000f, 2000f, 4000f, 8000f, 16000f)
-    val FLAT = FreqCurvePreset("平坦", "无频响调整", floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f))
-    val JBL_FLIP = FreqCurvePreset("JBL Flip", "模拟 JBL Flip 音箱频响，低频澎湃",
-        floatArrayOf(0f, 0f, 10f, 7f, 1.2f, 0f, -2f, -2.5f, 0f, 0f))
-    val JBL_PARTYBOX = FreqCurvePreset("JBL PartyBox", "模拟 JBL PartyBox 超重低音",
-        floatArrayOf(0f, 9f, 3.6f, 0f, 0f, 0f, 0f, 0f, 0f, 0f))
-    val SURROUND_L = FreqCurvePreset("环绕声 L", "左声道环绕声频响",
-        floatArrayOf(0f, 6f, 3f, 0f, 5f, 2f, 5f, 3f, 0f, 0f))
-    val SURROUND_R = FreqCurvePreset("环绕声 R", "右声道环绕声频响",
-        floatArrayOf(0f, 5f, 0f, 0f, 2.5f, 0f, 3f, 3f, 0f, 0f))
-    val VOICE_BOOST = FreqCurvePreset("人声增强", "突出中频人声，适合语音场景",
-        floatArrayOf(4f, 1.5f, -0.44f, 0.7f, 2f, -4.5f, 0.2f, 1.7f, 3f, 0.8f))
-    val HEADPHONE_HIFI = FreqCurvePreset("耳机 Hi-Fi", "Harman 风格监听曲线，细节通透",
-        floatArrayOf(2f, 1f, 0f, -0.5f, 0f, 1f, 2f, 3f, 4f, 5f),
-        floatArrayOf(0f, 0f, -2f, -1f, 0f, 1f, 0f, -1f, 0f, 2f))
-    val BASS_BOOST_PRE = FreqCurvePreset("低音增强+", "前级预渲染 + 多段 EQ，深度低频",
-        floatArrayOf(0f, 3f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
-        floatArrayOf(0f, 6f, 4f, 0f, 0f, 0f, 0f, 0f, 0f, 0f))
-    val ALL = listOf(FLAT, JBL_FLIP, JBL_PARTYBOX, SURROUND_L, SURROUND_R,
-                     VOICE_BOOST, HEADPHONE_HIFI, BASS_BOOST_PRE)
-}
-
 enum class AudioEngine(val key: String, val displayName: String, val description: String) {
     PASSTHROUGH("passthrough", "直通模式", "不进行任何音频处理"),
     ECHIO_EQ("echio_eq", "Echio 均衡", "增益/低音/高音/混响/变调"),
-    FREQ_CURVE("freq_curve", "频响曲线", "HxCore 风格 10 段均衡 + 前级预渲染"),
 }
 
 /** 引擎健康状态 */
@@ -69,13 +28,15 @@ object NativeAudioProcessor {
 
     private var loaded = false
     private var jniLoadAttempted = false
-    private var currentEngine: AudioEngine = AudioEngine.FREQ_CURVE
-    var currentCurvePreset: Int = 0
-        private set
+    // Task 1: 默认引擎改为 ECHIO_EQ，冷启动即走 nativeProcessAudio 全 Step1~8
+    private var currentEngine: AudioEngine = AudioEngine.ECHIO_EQ
 
     // 降级参数缓存（JNI 加载后推送给 C++）
     private var pendingParams: EqParams? = null
     private var engineHealth: EngineHealth = EngineHealth.BROKEN
+
+    // 上次已推送并记录日志的参数（用于高频滑块更新时的日志降级）
+    private var lastLogParams: EqParams? = null
 
     private data class EqParams(
         val gainDb: Float, val bassDb: Float, val trebleDb: Float,
@@ -103,14 +64,10 @@ object NativeAudioProcessor {
 
             // 保存原引擎状态和参数
             val savedEngine = currentEngine
-            val savedCurve = currentCurvePreset
             val savedParams = pendingParams
             if (loaded) {
                 // 设一个明显非零参数确保引擎会处理
                 nativeSetEqParams(5f, 0f, 0f, 0f, 0, 0f, 0f, 0f, 0f)
-                // 也设频响曲线为非零
-                val testBands = floatArrayOf(5f, 5f, 5f, 5f, 5f, 5f, 5f, 5f, 5f, 5f)
-                nativeSetFreqCurve(testBands, null, 48000)
             }
 
             val output = ByteArray(sampleCount * 2)
@@ -118,16 +75,12 @@ object NativeAudioProcessor {
 
             // 恢复引擎状态和参数（确保不自测污染用户设置）
             if (loaded) {
-                if (savedEngine == AudioEngine.FREQ_CURVE) {
-                    setCurvePreset(savedCurve)
-                } else {
-                    // 恢复 ECHIO_EQ 参数
-                    savedParams?.let {
-                        nativeSetEqParams(it.gainDb, it.bassDb, it.trebleDb, it.reverbMix,
-                            it.pitchSemitones, it.formantShift, it.distortion,
-                            it.echoDelayMs, it.echoDecay)
-                    } ?: nativeSetEqParams(0f, 0f, 0f, 0f, 0, 0f, 0f, 0f, 0f)
-                }
+                // 恢复 ECHIO_EQ 参数
+                savedParams?.let {
+                    nativeSetEqParams(it.gainDb, it.bassDb, it.trebleDb, it.reverbMix,
+                        it.pitchSemitones, it.formantShift, it.distortion,
+                        it.echoDelayMs, it.echoDecay)
+                } ?: nativeSetEqParams(0f, 0f, 0f, 0f, 0, 0f, 0f, 0f, 0f)
             }
             currentEngine = savedEngine
 
@@ -159,23 +112,14 @@ object NativeAudioProcessor {
     }
 
     fun loadEngine(prefs: SharedPreferences) {
-        val saved = prefs.getString(KEY_ENGINE, AudioEngine.FREQ_CURVE.key) ?: AudioEngine.FREQ_CURVE.key
-        currentEngine = AudioEngine.entries.find { it.key == saved } ?: AudioEngine.FREQ_CURVE
-        currentCurvePreset = prefs.getInt(KEY_CURVE_PRESET, 0)
-        AppLogger.i("Engine", "从存储恢复: ${currentEngine.key}, 曲线预设=$currentCurvePreset")
+        // Task 1: 缺省引擎改为 ECHIO_EQ（冷启动即可走 nativeProcessAudio 全 Step1~8）
+        val saved = prefs.getString(KEY_ENGINE, AudioEngine.ECHIO_EQ.key) ?: AudioEngine.ECHIO_EQ.key
+        currentEngine = AudioEngine.entries.find { it.key == saved } ?: AudioEngine.ECHIO_EQ
+        AppLogger.i("Engine", "从存储恢复: ${currentEngine.key}")
     }
 
     fun saveEngine(prefs: SharedPreferences) {
-        prefs.edit().putString(KEY_ENGINE, currentEngine.key)
-            .putInt(KEY_CURVE_PRESET, currentCurvePreset).apply()
-    }
-
-    fun setCurvePreset(index: Int) {
-        currentCurvePreset = index.coerceIn(0, CurvePresets.ALL.size - 1)
-        val preset = CurvePresets.ALL[currentCurvePreset]
-        if (loaded) {
-            nativeSetFreqCurve(preset.bands, preset.preRender, 48000)
-        }
+        prefs.edit().putString(KEY_ENGINE, currentEngine.key).apply()
     }
 
     // ============================================================
@@ -195,8 +139,6 @@ object NativeAudioProcessor {
             loaded = true
             engineHealth = EngineHealth.OK
             AppLogger.i("Engine", "JNI加载成功，引擎健康")
-            // 初始化默认频响曲线
-            setCurvePreset(0)
             // 推送缓存的参数
             pendingParams?.let {
                 nativeSetEqParams(it.gainDb, it.bassDb, it.trebleDb, it.reverbMix,
@@ -251,7 +193,24 @@ object NativeAudioProcessor {
             return
         }
 
-        AppLogger.i("Engine", "setEqParams: gain=$g bass=$b treble=$t reverb=$r pitch=$p formant=$f dist=$d echo=${ed}ms decay=$ec")
+        val now = EqParams(g, b, t, r, p, f, d, ed, ec)
+        // 高频滑块拖动时避免每帧刷环形缓冲：仅当参数跨大步长变化时记录 INFO，
+        // 微调（<0.05）时只同步 native，不写内存日志。
+        val last = lastLogParams
+        val changedSignificantly = last == null ||
+            kotlin.math.abs(last.gainDb - g) > 0.05f ||
+            kotlin.math.abs(last.bassDb - b) > 0.05f ||
+            kotlin.math.abs(last.trebleDb - t) > 0.05f ||
+            kotlin.math.abs(last.reverbMix - r) > 0.05f ||
+            last.pitchSemitones != p ||
+            kotlin.math.abs(last.formantShift - f) > 0.05f ||
+            kotlin.math.abs(last.distortion - d) > 0.05f ||
+            kotlin.math.abs(last.echoDelayMs - ed) > 0.05f ||
+            kotlin.math.abs(last.echoDecay - ec) > 0.05f
+        lastLogParams = now
+        if (changedSignificantly) {
+            AppLogger.i("Engine", "setEqParams: gain=$g bass=$b treble=$t reverb=$r pitch=$p formant=$f dist=$d echo=${ed}ms decay=$ec")
+        }
         nativeSetEqParams(g, b, t, r, p, f, d, ed, ec)
     }
 
@@ -297,9 +256,6 @@ object NativeAudioProcessor {
                     AudioEngine.ECHIO_EQ -> {
                         nativeProcessAudio(input, output, size)
                     }
-                    AudioEngine.FREQ_CURVE -> {
-                        nativeProcessFreqCurve(input, output, size)
-                    }
                 }
             }
             // 第二层: Kotlin 纯软件降级（仅增益）
@@ -334,6 +290,20 @@ object NativeAudioProcessor {
     }
 
     // ============================================================
+    // 重置 DSP 模块状态
+    // ============================================================
+    // 清除管线中各模块的内部状态（如混响尾音、延迟缓冲），
+    // 避免语音包间残留残响。委托给 PipelineController 处理。
+    fun resetDspState() {
+        if (!loaded) {
+            AppLogger.w("Engine", "resetDspState: JNI未加载，跳过")
+            return
+        }
+        PipelineController.resetDspState()
+        AppLogger.i("Engine", "DSP 模块状态已重置")
+    }
+
+    // ============================================================
     // JNI 声明
     // ============================================================
 
@@ -344,10 +314,90 @@ object NativeAudioProcessor {
         echoDelayMs: Float, echoDecay: Float
     )
     private external fun nativeProcessAudio(input: ByteArray, output: ByteArray, size: Int)
-    private external fun nativeSetFreqCurve(bands: FloatArray, preRender: FloatArray?, sampleRate: Int)
-    private external fun nativeProcessFreqCurve(input: ByteArray, output: ByteArray, size: Int)
     private external fun nativeSetCompressor(thresholdDb: Float, ratio: Float, makeupGainDb: Float)
 
+    // ============================================================
+    // Task 6b 新增 JNI 声明（引擎侧 maidmic_jni.cpp 对应实现）
+    // ============================================================
+    // 与 maidmic_jni.cpp 中新增的 JNI 函数一一对应：
+    //   nativeSetAutoTune       → Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetAutoTune
+    //   nativeSetNoiseGate      → ..._nativeSetNoiseGate
+    //   nativeSetLimiter        → ..._nativeSetLimiter
+    //   nativeSetPresence       → ..._nativeSetPresence
+    //   nativeSetVoiceprintMask → ..._nativeSetVoiceprintMask
+    //   nativeGetEngineStats    → ..._nativeGetEngineStats（返回 {totalNs, totalFrames, callCount}）
+    //   nativeNeonEnabled       → ..._nativeNeonEnabled
+    // 可选模块（AutoTune/Presence/VoiceprintMask）在引擎侧默认加入默认管线但 bypass，
+    // 调用对应 nativeSet* 即启用；AutoTune 的 enabled 参数控制 bypass。
+
+    /** 设置自动调音参数（enabled 控制模块旁路，scale=音阶，retune/speed 为 0~1） */
+    external fun nativeSetAutoTune(enabled: Boolean, scale: Int, retune: Float, speed: Float)
+
+    /** 设置噪声门参数（阈值 dB、attack/release ms） */
+    external fun nativeSetNoiseGate(thresholdDb: Float, attackMs: Float, releaseMs: Float)
+
+    /** 设置限制器参数（阈值 dB、release ms） */
+    external fun nativeSetLimiter(thresholdDb: Float, releaseMs: Float)
+
+    /** 设置存在感模块参数（dB），调用即启用该模块 */
+    external fun nativeSetPresence(presenceDb: Float)
+
+    /** 设置声纹掩码模块参数（强度 0~1、模式），调用即启用该模块 */
+    external fun nativeSetVoiceprintMask(strength: Float, mode: Int)
+
+    /** 获取默认管线累计处理统计：{totalNs, totalFrames, callCount} */
+    external fun nativeGetEngineStats(): LongArray
+
+    /** 查询当前构建是否启用 ARM NEON SIMD */
+    external fun nativeNeonEnabled(): Boolean
+
+    // ============================================================
+    // Pipeline 管理 JNI 声明（对齐 maidmic_jni.cpp）
+    // ============================================================
+    // 以下 11 个函数对应 maidmic_jni.cpp 中的 nativePipeline* 系列。
+    // 声明为 public（不带 internal）以避免 Kotlin 对 external 函数可能的名称修饰，
+    // 确保 JNI 符号 Java_aoeck_dwyai_com_NativeAudioProcessor_nativePipeline* 正确链接。
+    // 供同模块的 PipelineController 直接调用。
+
+    /**
+     * 获取录音处理使用的默认管线句柄（g_default_pipeline，nativeProcessAudio 内部使用）。
+     * 由引擎管理生命周期（JNI_OnUnload 统一销毁），不可用 nativePipelineDestroy 释放；
+     * 0 表示默认管线不可用。
+     */
+    external fun nativeGetDefaultPipeline(): Long
+
+    /** 创建管线实例，返回句柄（0 表示失败） */
+    external fun nativePipelineCreate(): Long
+
+    /** 销毁管线实例 */
+    external fun nativePipelineDestroy(pipelinePtr: Long)
+
+    /** 添加模块到管线末尾，返回节点索引（-1 表示失败） */
+    external fun nativePipelineAddModule(pipelinePtr: Long, moduleId: Int): Int
+
+    /** 按索引移除模块 */
+    external fun nativePipelineRemoveModule(pipelinePtr: Long, index: Int)
+
+    /** 重排序模块（from → to，通过 swap 实现） */
+    external fun nativePipelineReorder(pipelinePtr: Long, from: Int, to: Int)
+
+    /** 交换两个模块位置 */
+    external fun nativePipelineSwap(pipelinePtr: Long, i: Int, j: Int)
+
+    /** 设置模块参数（按索引，参数 key 为字符串，值为 float） */
+    external fun nativePipelineSetParam(pipelinePtr: Long, index: Int, paramKey: String, value: Float)
+
+    /** 按索引设置模块旁路状态（对应 maidmic_pipeline_set_module_bypass，实时生效于录音） */
+    external fun nativePipelineSetModuleBypass(pipelinePtr: Long, index: Int, bypass: Boolean)
+
+    /** 处理音频（自定义管线） */
+    external fun nativePipelineProcess(pipelinePtr: Long, input: ByteArray, output: ByteArray, size: Int)
+
+    /** 重置管线中所有模块的状态 */
+    external fun nativePipelineReset(pipelinePtr: Long)
+
     private const val KEY_ENGINE = "audio_engine"
-    private const val KEY_CURVE_PRESET = "curve_preset"
+
+    /** 音效库页当前已应用的预设音效包名（写入 "maidmic_eq" prefs，供 EffectsLibraryPage 持久化"已应用"状态） */
+    const val KEY_APPLIED_EFFECT_PACK = "applied_effect_pack"
 }

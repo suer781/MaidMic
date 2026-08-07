@@ -8,6 +8,7 @@ import android.app.Application
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import aoeck.dwyai.com.util.HapticHelper
 import rikka.shizuku.Shizuku
 
 class MaidMicApp : Application() {
@@ -23,6 +24,11 @@ class MaidMicApp : Application() {
         instance = this
         
         Log.i(TAG, "MaidMic starting...")
+        
+        // 初始化 LRA 触感反馈系统
+        HapticHelper.init(this)
+        val hapticPrefs = getSharedPreferences("maidmic_prefs", MODE_PRIVATE)
+        HapticHelper.setEnabled(hapticPrefs.getBoolean("haptic_enabled", true))
         
         // 初始化 Shizuku 状态
         ShizukuStatus.refresh()

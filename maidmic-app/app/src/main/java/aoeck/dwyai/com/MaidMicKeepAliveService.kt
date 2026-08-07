@@ -78,7 +78,7 @@ class MaidMicKeepAliveService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("MaidMic")
-            .setContentText("虚拟麦克风运行中")
+            .setContentText("后台保活运行中")
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentIntent(openPending)
             .addAction(android.R.drawable.ic_media_pause, "停止", stopPending)

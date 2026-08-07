@@ -34,10 +34,21 @@ import aoeck.dwyai.com.AppLogger
 import aoeck.dwyai.com.LogLevel
 import aoeck.dwyai.com.NativeAudioProcessor
 import aoeck.dwyai.com.EngineHealth
+import aoeck.dwyai.com.util.HapticHelper
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalContext
 
-// 用户必须逐字输入的声明文本
-// The exact text user must type to acknowledge
-const val DISCLAIMER_TEXT = "我已阅读并且已知可能会下载到恶意插件会带来的后果"
+// 免责声明文案（走个过场：确认时只需填任意内容）
+// Disclaimer text (a formality: any input confirms)
+const val DISCLAIMER_TEXT = "你一定！一定！要启用吗（思考）\n" +
+    "我先提前把话说在前面，我还没做好\n" +
+    "其次就是我没做好（理直气壮）\n" +
+    "哦，对了还有就是我没想好（你不会怪我的吧）\n" +
+    "你想走个过场你就填吧，一填一个不吱声\n\n" +
+    "哦对了，差点忘了表明未来恶意插件的态度了\n" +
+    "未来如果出现了恶意插件恶意代码造成的损失\n" +
+    "贡献开发者和本软件作者没有义务去为第三方插件造成的任何的损失负责"
 const val DISCLAIMER_TEXT_EN = "I have read and understand the potential consequences of downloading malicious plugins"
 
 /**
@@ -61,8 +72,6 @@ fun DeveloperDisclaimerDialog(
     // 是否输入了错误文字（用于显示红色提示）
     var hasError by remember { mutableStateOf(false) }
     
-    val disclaimerText = if (isChinese) DISCLAIMER_TEXT else DISCLAIMER_TEXT_EN
-    
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -78,64 +87,28 @@ fun DeveloperDisclaimerDialog(
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 8.dp)
             ) {
-                // 风险说明
-                // Risk explanation
+                // 声明文案（用户自定义）
                 Text(
-                    text = if (isChinese)
-                        "启用 UGC 插件后，您可以安装由第三方开发者编写的插件。"
-                        + "这些插件可能包含恶意代码，可能导致：\n\n"
-                        + "• 个人隐私数据泄露\n"
-                        + "• 设备性能下降或异常\n"
-                        + "• 音频数据被截取或篡改\n"
-                        + "• 设备稳定性问题\n\n"
-                        + "MaidMic 团队不对任何因使用第三方插件导致的损失负责。\n\n"
-                        + "请在下方输入以下声明以确认："
-                    else
-                        "Enabling UGC plugins allows installation of plugins written by third-party developers. "
-                        + "These plugins may contain malicious code that could lead to:\n\n"
-                        + "• Personal data leakage\n"
-                        + "• Device performance degradation\n"
-                        + "• Audio data interception or tampering\n"
-                        + "• Device instability\n\n"
-                        + "The MaidMic team is not responsible for any losses caused by third-party plugins.\n\n"
-                        + "Please type the following statement to confirm:",
+                    text = if (isChinese) DISCLAIMER_TEXT else DISCLAIMER_TEXT_EN,
                     fontSize = 14.sp,
-                    lineHeight = 20.sp
+                    lineHeight = 22.sp
                 )
-                
+
                 Spacer(modifier = Modifier.height(16.dp))
-                
-                // 需要输入的声明文本（等宽字体，清晰展示）
-                // The text that needs to be typed (monospace for clarity)
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.small,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        text = "\"$disclaimerText\"",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(12.dp),
-                        textAlign = TextAlign.Center
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(16.dp))
-                
-                // 输入框
-                // Input field
+
+                // 输入框（走个过场：填任意内容即可确认）
+                // Input field (just a formality: any input confirms)
                 OutlinedTextField(
                     value = typedText,
                     onValueChange = {
                         typedText = it
                         hasError = false  // 用户重新输入时清除错误状态
                     },
-                    label = { Text(if (isChinese) "在此输入上述声明" else "Type the statement above") },
+                    label = { Text(if (isChinese) "走个过场，随便填点内容" else "Type anything to confirm") },
                     modifier = Modifier.fillMaxWidth(),
                     isError = hasError,
                     supportingText = if (hasError) {
-                        { Text(if (isChinese) "输入内容与声明不匹配，请重试" else "Input does not match, please try again") }
+                        { Text(if (isChinese) "至少填点内容吧（走个过场）" else "Type something to confirm") }
                     } else null,
                     singleLine = false,
                     minLines = 2,
@@ -146,7 +119,7 @@ fun DeveloperDisclaimerDialog(
                     ),
                     keyboardActions = KeyboardActions(
                         onDone = {
-                            if (typedText.trim() == disclaimerText) {
+                            if (typedText.isNotBlank()) {
                                 onConfirmed()
                             } else {
                                 hasError = true
@@ -159,14 +132,14 @@ fun DeveloperDisclaimerDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (typedText.trim() == disclaimerText) {
+                    if (typedText.isNotBlank()) {
                         onConfirmed()
                     } else {
                         hasError = true
                     }
                 }
             ) {
-                Text(if (isChinese) "确认启用" else "Enable")
+                Text(if (isChinese) "我知道了" else "Got it")
             }
         },
         dismissButton = {
@@ -183,7 +156,7 @@ fun DeveloperDisclaimerDialog(
  * 包含 UGC 插件的开关（需要输入免责声明）、
  * DAG/简易编辑模式切换、以及其他调试功能。
  * 
- * 注意：这个页面默认隐藏，用户需要在"关于"页面连续点击版本号 7 次才会出现。
+ * 注意：这个页面默认隐藏，用户需要在"设置 → 关于"页面连续点击版本号 5 次才会出现。
  * 没错，跟 Android 原生开发者选项一样。
  */
 @Composable
@@ -197,6 +170,8 @@ fun DeveloperSettingsPage(
 ) {
     // 是否显示免责声明弹窗
     var showDisclaimer by remember { mutableStateOf(false) }
+    // UGC 功能尚未实现：确认免责声明后弹"还没做好"提示
+    var showNotReadyDialog by remember { mutableStateOf(false) }
     
     Column(
         modifier = Modifier
@@ -249,9 +224,9 @@ fun DeveloperSettingsPage(
                         )
                         Text(
                             text = if (isChinese)
-                                "允许安装第三方编写的插件（Lua/WASM）。可能存在安全风险。"
+                                "功能尚未完成，敬请期待。开启需填写免责声明（走个过场）。"
                             else
-                                "Allow third-party plugins (Lua/WASM). May pose security risks.",
+                                "Feature not ready yet. Enabling requires a disclaimer (just a formality).",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -336,6 +311,121 @@ fun DeveloperSettingsPage(
             }
         }
         
+        // ============================================================
+        // 触感诊断（Haptic Diagnostics）
+        // ============================================================
+        Spacer(modifier = Modifier.height(16.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = if (isChinese) "🔧 触感诊断" else "🔧 Haptic Diagnostics",
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val hapticInfo = remember { HapticHelper.isAvailable() }
+
+                DiagnosticRow(
+                    label = if (isChinese) "振动器" else "Vibrator",
+                    value = if (hapticInfo.first) "✓" else "✗",
+                    isOk = hapticInfo.first
+                )
+                DiagnosticRow(
+                    label = if (isChinese) "VibrationEffect" else "VibrationEffect",
+                    value = if (hapticInfo.second) "✓" else "✗",
+                    isOk = hapticInfo.second
+                )
+                DiagnosticRow(
+                    label = if (isChinese) "LRA 线性马达" else "LRA Motor",
+                    value = if (hapticInfo.third) "✓" else "✗",
+                    isOk = hapticInfo.third
+                )
+                DiagnosticRow(
+                    label = if (isChinese) "触感开关" else "Haptic Enabled",
+                    value = if (HapticHelper.isEnabled()) "ON" else "OFF",
+                    isOk = HapticHelper.isEnabled()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                var isTesting by remember { mutableStateOf(false) }
+                // 使用组合作用域：页面销毁时协程随组合取消，finally 会兜底停止震动
+                val testScope = rememberCoroutineScope()
+
+                // 组件销毁时若测试仍在进行，立即停止震动，避免残留
+                DisposableEffect(Unit) {
+                    onDispose {
+                        HapticHelper.stop()
+                    }
+                }
+
+                Button(
+                    onClick = {
+                        if (isTesting) return@Button
+                        isTesting = true
+                        testScope.launch {
+                            try {
+                                // 进入前先清残留震动，避免与上一轮测试重叠
+                                HapticHelper.stop()
+                                HapticHelper.basic()
+                                delay(300)
+                                HapticHelper.stop()
+                                HapticHelper.success()
+                                delay(300)
+                                HapticHelper.stop()
+                                HapticHelper.warning()
+                                delay(300)
+                                HapticHelper.stop()
+                                HapticHelper.error()
+                                delay(300)
+                                HapticHelper.stop()
+                                // 连续震动会无限循环，限时展示约 1.5s 后由调用方停止
+                                HapticHelper.continuous()
+                                delay(1500)
+                                HapticHelper.stop()
+                                HapticHelper.mechanical()
+                                delay(300)
+                                HapticHelper.stop()
+                                HapticHelper.lraRhythm()
+                            } finally {
+                                // 正常结束、协程取消或异常时都确保停止震动并复位按钮
+                                HapticHelper.stop()
+                                isTesting = false
+                            }
+                        }
+                    },
+                    enabled = !isTesting,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = if (isTesting)
+                            (if (isChinese) "测试中..." else "Testing...")
+                        else
+                            (if (isChinese) "测试全部振动语义" else "Test All Semantics")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (hapticInfo.third) {
+                    Button(
+                        onClick = {
+                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                                HapticHelper.mechanical()
+                                delay(300)
+                                HapticHelper.lraRhythm()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (isChinese) "测试 LRA 独占" else "Test LRA Exclusive")
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
         
         // ============================================================
@@ -563,11 +653,42 @@ fun DeveloperSettingsPage(
             isChinese = isChinese,
             onConfirmed = {
                 showDisclaimer = false
-                onUgcToggle(true)
+                // UGC 插件尚未实现：确认免责声明后也不启用，
+                // 强制保持关闭并弹窗提示用户去看其他功能
+                onUgcToggle(false)
+                showNotReadyDialog = true
             },
             onDismiss = {
                 showDisclaimer = false
                 // 用户取消了，保持关闭状态
+            }
+        )
+    }
+
+    // UGC 功能未完成提示弹窗
+    if (showNotReadyDialog) {
+        AlertDialog(
+            onDismissRequest = { showNotReadyDialog = false },
+            title = {
+                Text(
+                    text = if (isChinese) "还没做好" else "Not ready yet",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = if (isChinese)
+                        "还没做好这个功能，去看看其他的？"
+                    else
+                        "This feature isn't ready yet. Check out the others?",
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showNotReadyDialog = false }) {
+                    Text(if (isChinese) "好的" else "OK")
+                }
             }
         )
     }
@@ -600,6 +721,26 @@ fun AdbCommand(command: String) {
             fontFamily = FontFamily.Monospace,
             color = Color(0xFFCE93D8),
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        )
+    }
+}
+
+@Composable
+private fun DiagnosticRow(label: String, value: String, isOk: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (isOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
         )
     }
 }

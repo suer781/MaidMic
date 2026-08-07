@@ -98,16 +98,16 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
 
+    // savedstate-ktx — Task 10: 悬浮面板 ComposeView 在 Service 中需要
+    // setViewTreeSavedStateRegistryOwner 扩展函数（savedstate-ktx 提供）
+    implementation("androidx.savedstate:savedstate-ktx:1.2.0")
+
     // Shizuku — 非 root 提权（从 jitpack 获取，已在 settings.gradle.kts 中配置）
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 
     // LuaJ — Lua 插件运行时
     implementation("org.luaj:luaj-jse:3.0.1")
-
-    // ZXing — 二维码生成+扫描
-    implementation("com.google.zxing:core:3.5.3")
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
 
     // 测试
     testImplementation("junit:junit:4.13.2")
