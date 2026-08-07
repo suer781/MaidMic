@@ -13,6 +13,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+// NEON SIMD：仅 ARM 构建包含 <arm_neon.h>，非 ARM 平台走行为一致的标量路径
+// NEON SIMD: header only included on ARM builds; scalar fallback elsewhere.
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 // ============================================================
 // 模块实例数据
 // Module instance data
@@ -25,6 +31,7 @@
 typedef struct {
     float gain_linear;         // 线性增益值（用户调的是 dB，内部存线性值）
     float gain_db;             // 用户界面上的 dB 值
+    maidmic_ramp_t gain_ramp;  // 线性增益平滑器（消除 zipper 噪声）
     bool bypass;               // 旁路开关
     uint32_t sample_rate;
     uint16_t channels;
@@ -65,6 +72,7 @@ static void* gain_create(void) {
     if (!g) return NULL;
     g->gain_db = 0.0f;
     g->gain_linear = 1.0f;  // 0dB = 无增益
+    maidmic_ramp_init(&g->gain_ramp, g->gain_linear);
     g->bypass = false;
     return g;
 }
@@ -99,6 +107,8 @@ static bool gain_set_param(void* userdata, const char* key, maidmic_param_t valu
         // dB 转线性：linear = 10^(dB/20)
         // dB to linear conversion
         g->gain_linear = powf(10.0f, g->gain_db / 20.0f);
+        // 只更新目标值，process 中逐样本平滑逼近，避免 zipper 噪声
+        maidmic_ramp_set_target(&g->gain_ramp, g->gain_linear);
         return true;
     }
     
@@ -141,9 +151,20 @@ static maidmic_param_t gain_get_param(void* userdata, const char* key) {
 static bool gain_process(void* userdata, const maidmic_buffer_t* input, maidmic_buffer_t* output) {
     gain_data_t* g = (gain_data_t*)userdata;
     
-    if (g->bypass || g->gain_linear == 1.0f) {
-        // 旁路或单位增益时直接复制
-        memcpy(output->data, input->data, input->data_bytes);
+    if (g->bypass) {
+        // 旁路时直接复制（原地调用时跳过自拷）
+        if (output->data != input->data) {
+            memcpy(output->data, input->data, input->data_bytes);
+        }
+        output->meta = input->meta;
+        return true;
+    }
+
+    // 增益已平滑到位且为单位增益：快速直通（避免无谓的逐样本循环）
+    if (g->gain_ramp.current == g->gain_ramp.target && g->gain_ramp.current == 1.0f) {
+        if (output->data != input->data) {
+            memcpy(output->data, input->data, input->data_bytes);
+        }
         output->meta = input->meta;
         return true;
     }
@@ -152,19 +173,41 @@ static bool gain_process(void* userdata, const maidmic_buffer_t* input, maidmic_
     
     if (input->meta.format == MAIDMIC_SAMPLE_F32) {
         // 32-bit float 处理（DSP 内部推荐格式）
+        // 热路径：按 4 对齐块做 NEON 向量乘法（vfmulq_f32），尾部标量收尾。
+        // 每块内先按原顺序取 4 个平滑增益值，与标量路径的平滑序列完全一致，
+        // 因此每个样本的乘积与标量路径逐样本相同（仅浮点累加次序不变、无差异）。
         const float* src = (const float*)input->data;
         float* dst = (float*)output->data;
-        for (uint32_t i = 0; i < sample_count; i++) {
-            dst[i] = src[i] * g->gain_linear;
+        uint32_t i = 0;
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+        for (; i + 4 <= sample_count; i += 4) {
+            // 顺序取出 4 个平滑增益（保持与标量路径相同的逐样本推进次序）
+            float gain4[4];
+            gain4[0] = maidmic_ramp_next(&g->gain_ramp);
+            gain4[1] = maidmic_ramp_next(&g->gain_ramp);
+            gain4[2] = maidmic_ramp_next(&g->gain_ramp);
+            gain4[3] = maidmic_ramp_next(&g->gain_ramp);
+            float32x4_t gv = vld1q_f32(gain4);
+            float32x4_t sv = vld1q_f32(&src[i]);
+            vst1q_f32(&dst[i], vmulq_f32(sv, gv));
+        }
+#endif
+        for (; i < sample_count; i++) {
+            // 每样本平滑推进一次增益，消除 zipper 噪声
+            float gain = maidmic_ramp_next(&g->gain_ramp);
+            dst[i] = src[i] * gain;
             // 不削波！用户可以把增益拉到爆音，这是他们的选择。
             // No clipping! User can push gain into distortion territory.
         }
     } else if (input->meta.format == MAIDMIC_SAMPLE_S16) {
         // 16-bit 整数处理（Android 默认格式）
+        // 保留标量：整型↔浮点转换 + 钳位回写 + 逐样本平滑增益，
+        // 向量化需 4 路 vcvtq 与窄化/钳位回写，转换开销抵消 SIMD 收益。
         const int16_t* src = (const int16_t*)input->data;
         int16_t* dst = (int16_t*)output->data;
         for (uint32_t i = 0; i < sample_count; i++) {
-            float sample = (float)src[i] * g->gain_linear;
+            float gain = maidmic_ramp_next(&g->gain_ramp);
+            float sample = (float)src[i] * gain;
             // 简单的 int16 钳位（整型溢出会爆音，钳位至少不崩）
             // Simple int16 clamp
             if (sample > 32767.0f) sample = 32767.0f;
@@ -179,8 +222,8 @@ static bool gain_process(void* userdata, const maidmic_buffer_t* input, maidmic_
 
 static void gain_reset(void* userdata) {
     gain_data_t* g = (gain_data_t*)userdata;
-    // Gain 没有内部状态需要复位
-    (void)g;
+    // Gain 没有内部状态需要复位；参数平滑器直接到位
+    maidmic_ramp_reset(&g->gain_ramp);
 }
 
 // ============================================================
