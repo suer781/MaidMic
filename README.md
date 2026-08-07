@@ -37,7 +37,7 @@ MaidMic 是一个开源的 Android 变声录音工具，搭载自研 **Echio 变
 
 ### 🎤 预录音变声
 - 录音时实时应用 DSP 效果，直接存为语音包（WAV），随时外放
-- 无需 root / 虚拟麦克风，纯本机录音处理
+- 无需 root / 纯本机预置录音处理
 
 ### 其他
 - Material 3 暗色主题（Jetpack Compose）
