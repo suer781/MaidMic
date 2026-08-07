@@ -1,7 +1,7 @@
 # MaidMic 功能缺口分析
 ## Gap Analysis vs Industry Voice Changer Standards
 
-生成日期: 2026-04-29
+日期: 2026-04-29
 
 ---
 
@@ -10,29 +10,30 @@
 ### MaidMic 已有功能 ✅
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| 引擎选择器 | ✅ | 直通 / Echio 均衡 / 频响曲线 |
+| 引擎选择器 | ✅ | 直通 / Echio 均衡 |
 | 音量增益 (Gain) | ✅ | ±10dB |
-| 均衡器 (EQ) | ✅ | Echio: 低音+高音 shelving / Curves: 10段 peaking |
+| 均衡器 (EQ) | ✅ | Echio: 低音+高音 shelving |
 | 混响 (Reverb) | ✅ | 简单延迟线 |
-| 变调 (Pitch Shift) | ✅ | ±12 半音，线性插值 |
-| 预设 (Presets) | ✅ | 6个 Echio 预设 + 8个曲线预设 |
-| 虚拟麦克风桥接 | ✅ | Shizuku / Root / 无障碍 |
-| 前级预渲染 (Pre-render) | ✅ | HxCore 风格双曲线层 |
+| 变调 (Pitch Shift) | ✅ | ±12 半音，相位对齐拼接（PSOLA 类） |
+| 预设 (Presets) | ✅ | 5 个变声预设（萝莉/大叔/机器人/原声/自定义） |
+| 录音存包 | ✅ | VoicePackRecorder（录音→变声→存包） |
+| 语音包外放（音板） | ✅ | VoicePackPlayer |
+| 悬浮球快捷面板 | ✅ | EQ/变声开关、长按录音 |
 
-### 行业变声器常见功能 ❌（MaidMic 缺失）
-| 功能 | 优先级 | 说明 |
-|------|--------|------|
-| **Formant Shifting** (共振峰偏移) | ✅ 新增 | Shelving filter 补偿，±12 半音等效 |
-| **Distortion** (失真) | ✅ 新增 | 软削波 waveshaping，0~1 驱动量 |
-| **Echo/Delay** (回声) | ✅ 新增 | 反馈延迟线，最长 500ms |
-| **Chorus** (合唱) | 🟡 中 | 多层叠加，增加声音厚度 |
-| **Noise Gate** (噪声门) | 🟡 中 | 消除背景噪音 |
-| **Bitcrushing** (降比特) | 🟢 低 | Lo-Fi 效果 |
-| **Vibrato** (颤音) | 🟢 低 | 周期性音高调制 |
-| **Voice Lock** (语音锁定) | 🟢 低 | 监听时实时听到处理效果 |
-| **Audio Recording** (录音) | 🟢 低 | 保存处理后的音频 |
-| **Auto-Tune** (自动校音) | 🔴 高 | 将人声量化到最近的音阶 |
-| **Soundboard** (音板) | 🟢 低 | 播放预录制音效 |
+### 行业变声器常见功能盘点
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **Formant Shifting** (共振峰偏移) | ✅ 已实现 | Shelving filter 补偿，±12 半音，默认链已含 |
+| **Distortion** (失真) | ✅ 已实现 | 软削波 waveshaping，0~1 驱动量 |
+| **Echo/Delay** (回声) | ✅ 已实现 | 反馈延迟线，最长 500ms |
+| **Noise Gate** (噪声门) | ✅ 已实现 | noisegate.c 已完成，未预置默认链，UI 未接入 |
+| **Audio Recording** (录音) | ✅ 已实现 | VoicePackRecorder（录音→变声→存包）+ WavWriter |
+| **Soundboard** (音板) | ✅ 已实现 | VoicePackPlayer 语音包外放 |
+| **Auto-Tune** (自动校音) | 🟡 引擎就绪 | autotune.c + nativeSetAutoTune 已实现，App 端无 UI 入口 |
+| **Chorus** (合唱) | ❌ 未实现 | 仅 module.h 预留 ID 6，无实现 |
+| **Bitcrushing** (降比特) | ❌ 未实现 | Lo-Fi 效果 |
+| **Vibrato** (颤音) | ❌ 未实现 | 周期性音高调制 |
+| **Voice Lock** (语音锁定) | ❌ 未实现 | 监听时实时听到处理效果 |
 
 ### Android 平台特有缺口
 | 功能 | 优先级 | 说明 |
@@ -49,16 +50,17 @@
 1. **Formant Shifting** — 配合 Pitch Shift 实现自然变声 ✅
 2. **Distortion** — 实现机器人、恶魔等经典效果 ✅
 3. **Echo/Delay** — 反馈延迟线，最长 500ms ✅
-4. **4 个新预设** — 机器人、恶魔、花栗鼠、幽灵 ✅
+4. **5 个变声预设** — 萝莉/大叔/机器人/原声/自定义 ✅
 
 ### 中期
-5. **Chorus + Noise Gate** — 提升音质下限
-6. **更低延迟** — 当前 10 段 biquad 级联 + 多效果可能有延迟
+5. **Noise Gate 接入** — 引擎已实现（noisegate.c），接入默认链 + UI
+6. **Auto-Tune UI 接入** — 引擎 + JNI 已就绪，App 端无入口
+7. **更低延迟** — 当前 9 模块级联，完整管线延迟待压到 <50ms
 
 ### 长期
-8. **Auto-Tune** — 需要音高检测算法
-9. **Soundboard** — 简单的 WAV 播放器集成
-10. **录音功能** — 保存处理后的音频文件
+8. **Chorus** — module.h 已预留 ID 6，需实现模块
+9. **Bitcrushing / Vibrato** — Lo-Fi 与颤音效果
+10. **Voice Lock** — 监听时实时听到处理效果
 
 ---
 

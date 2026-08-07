@@ -5,6 +5,7 @@
 **/bin/
 **/obj/
 **/out/
+**/.cxx/
 *.o
 *.so
 *.a
@@ -13,6 +14,7 @@
 .idea/
 *.iml
 .gradle/
+.trae/
 local.properties
 
 # Go
@@ -30,6 +32,7 @@ Thumbs.db
 # Temp
 /tmp/
 *.tmp
+build_err.log
 
 # Large downloads
 *.apk
