@@ -68,10 +68,14 @@ ring_buffer_t* ring_buffer_create(uint32_t capacity, size_t frame_size) {
     }
     
     // 一次分配结构体 + 数据缓冲区（减少内存碎片）
-    // Single allocation for struct + data buffer (less fragmentation)
+    // Single allocation for struct + data buffer (less memory fragmentation)
     ring_buffer_t* rb = (ring_buffer_t*)malloc(sizeof(ring_buffer_t) + capacity * frame_size);
     if (!rb) return NULL;
-    
+
+    // 整块清零：sample_rate/channels 等音频格式字段必须初始化，
+    // 否则 get_latency_ms 会用垃圾值作除数（可能为 0 → inf/NaN）
+    memset(rb, 0, sizeof(ring_buffer_t) + capacity * frame_size);
+
     rb->capacity = capacity;
     rb->mask = capacity - 1;
     rb->frame_size = frame_size;
@@ -84,8 +88,8 @@ ring_buffer_t* ring_buffer_create(uint32_t capacity, size_t frame_size) {
     atomic_init(&rb->underrun_count, 0);
     atomic_init(&rb->overrun_count, 0);
     
-    memset(rb->buffer, 0, capacity * frame_size);
-    
+    // 数据缓冲已在上述整块清零时归零
+
     return rb;
 }
 
@@ -208,6 +212,7 @@ uint32_t ring_buffer_get_fill(ring_buffer_t* rb) {
 // 获取延迟估计（毫秒）
 // Get estimated latency (ms)
 float ring_buffer_get_latency_ms(ring_buffer_t* rb) {
+    if (rb->sample_rate == 0) return 0.0f;  // 采样率未配置时无法估算延迟
     uint32_t fill = ring_buffer_get_fill(rb);
     return (float)fill / rb->sample_rate * 1000.0f;
 }

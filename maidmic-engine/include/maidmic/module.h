@@ -31,6 +31,14 @@ extern "C" {
 #define MAIDMIC_MODULE_ID_DELAY      8    // 延迟
 #define MAIDMIC_MODULE_ID_NOISEGATE  9    // 噪声门
 #define MAIDMIC_MODULE_ID_LIMITER    10   // 限制器
+#define MAIDMIC_MODULE_ID_BASS       11   // 低音 Shelving 滤波器
+#define MAIDMIC_MODULE_ID_TREBLE     12   // 高音 Shelving 滤波器
+#define MAIDMIC_MODULE_ID_FORMANT    13   // 共振峰偏移
+#define MAIDMIC_MODULE_ID_ECHO       14   // 回声/延迟
+#define MAIDMIC_MODULE_ID_VOICE_TRANSFORM 15   // LPC 源-滤波器变声引擎
+#define MAIDMIC_MODULE_ID_VOICEPRINT_MASK 16   // 声纹脱敏
+#define MAIDMIC_MODULE_ID_PRESENCE   17   // 人声存在感
+#define MAIDMIC_MODULE_ID_AUTOTUNE   18   // 自动修音
 #define MAIDMIC_MODULE_ID_LUA        999  // Lua 插件模块 (通用代理)
 
 // ============================================================
@@ -129,6 +137,56 @@ struct maidmic_module_t {
     uint32_t capabilities;                   // 能力标志 (MAIDMIC_CAP_*)
     const maidmic_module_vtable_t* vtable;   // 函数表
 };
+
+// ============================================================
+// SIMD 能力检测
+// SIMD capability detection
+// ============================================================
+// 编译期检测当前构建是否启用 ARM NEON SIMD（非 ARM 平台恒为 false）。
+// 供 JNI 层输出 "NEON enabled" 日志。实现位于 lpc.c。
+// Compile-time check whether this build uses ARM NEON SIMD.
+bool maidmic_neon_enabled(void);
+
+// ============================================================
+// 参数平滑辅助（消除 zipper 噪声）
+// Parameter smoothing helper (anti-zipper)
+// ============================================================
+// 对连续可调参数做一阶线性逼近：set_param 只更新 target（目标值），
+// process 热路径中每样本调用 next() 逼近目标值，避免参数跳变产生爆音。
+// 步长 step 默认 1/32：以 48kHz 计约 0.7ms 完成一次全量逼近，足够平滑。
+// 平滑对象通常是"计算中间量"（如线性增益、变调比率），而非 UI 显示值，
+// 这样无需在每样本循环内做 powf 等重计算。
+typedef struct {
+    float current;   // 当前（正在逼近的）值
+    float target;    // 目标值（set_target 设置）
+    float step;      // 每样本步进量
+} maidmic_ramp_t;
+
+static inline void maidmic_ramp_init(maidmic_ramp_t* r, float value) {
+    r->current = r->target = value;
+    r->step = 1.0f / 32.0f;
+}
+
+static inline void maidmic_ramp_set_target(maidmic_ramp_t* r, float target) {
+    r->target = target;
+}
+
+// 复位：直接到位（复位时机不在音频热路径，无需平滑过渡）
+static inline void maidmic_ramp_reset(maidmic_ramp_t* r) {
+    r->current = r->target;
+}
+
+// 每样本推进一次，返回逼近后的当前值
+static inline float maidmic_ramp_next(maidmic_ramp_t* r) {
+    if (r->current < r->target) {
+        r->current += r->step;
+        if (r->current > r->target) r->current = r->target;
+    } else if (r->current > r->target) {
+        r->current -= r->step;
+        if (r->current < r->target) r->current = r->target;
+    }
+    return r->current;
+}
 
 #ifdef __cplusplus
 }

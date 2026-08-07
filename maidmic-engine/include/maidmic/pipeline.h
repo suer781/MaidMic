@@ -220,6 +220,20 @@ const maidmic_dag_node_t* maidmic_pipeline_get_module_by_id(const maidmic_pipeli
 // Get current latency estimate (ms)
 float maidmic_pipeline_get_latency_ms(const maidmic_pipeline_t* pipeline);
 
+// --------------------------------------------------------
+// 处理性能统计
+// Processing performance stats
+// --------------------------------------------------------
+
+// 获取管线处理性能统计（自管线创建以来累计）。
+// 任一输出指针可为 NULL（跳过对应项）。
+// Get accumulated processing stats since pipeline creation.
+// Any output pointer may be NULL (that item is skipped).
+void maidmic_pipeline_get_stats(const maidmic_pipeline_t* pipeline,
+                                uint64_t* total_ns,
+                                uint64_t* total_frames,
+                                uint64_t* call_count);
+
 #ifdef __cplusplus
 }
 #endif
