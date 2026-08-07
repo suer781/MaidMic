@@ -60,11 +60,10 @@ cd maidmic-app
 
 - Android SDK 34
 - NDK (CMake 3.22+)
-- JDK 17+（编译目标 17）
+- JDK 17+（编译目标最高21）
 
 ## 鸣谢
 
-- **Shizuku** by Rikka Apps — 非 root 权限提升
 - **LuaJ** — Lua 插件沙箱运行时
 
 ## 许可
