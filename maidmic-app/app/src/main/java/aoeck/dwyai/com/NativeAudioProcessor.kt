@@ -345,11 +345,45 @@ object NativeAudioProcessor {
     /** 设置声纹掩码模块参数（强度 0~1、模式），调用即启用该模块 */
     external fun nativeSetVoiceprintMask(strength: Float, mode: Int)
 
+    /** 设置颤音模块参数（rate Hz、depth 半音），enabled 控制旁路；模块不在链中时自动挂载 */
+    external fun nativeSetVibrato(rateHz: Float, depthSt: Float, enabled: Boolean)
+
+    /** 设置合唱模块参数（mix 0~1、rate Hz、depth ms）；mix=0 自动旁路 */
+    external fun nativeSetChorus(mix: Float, rateHz: Float, depthMs: Float)
+
+    /** 设置降比特模块参数（bits 1~16、down 1~32、mix 0~1）；mix=0 自动旁路 */
+    external fun nativeSetBitcrusher(bits: Float, down: Float, mix: Float)
+
     /** 获取默认管线累计处理统计：{totalNs, totalFrames, callCount} */
     external fun nativeGetEngineStats(): LongArray
 
     /** 查询当前构建是否启用 ARM NEON SIMD */
     external fun nativeNeonEnabled(): Boolean
+
+    // ============================================================
+    // 新模块参数设置包装（容错：JNI 未加载时静默跳过）
+    // ============================================================
+
+    /** 设置颤音（rate Hz、depth 半音）；enabled=false 关闭 */
+    fun setVibrato(rateHz: Float, depthSt: Float, enabled: Boolean) {
+        if (!loaded) return
+        nativeSetVibrato(rateHz, depthSt, enabled)
+    }
+
+    /** 设置合唱（mix 0~1、rate Hz、depth ms）；mix=0 关闭 */
+    fun setChorus(mix: Float, rateHz: Float, depthMs: Float) {
+        if (!loaded) return
+        nativeSetChorus(mix, rateHz, depthMs)
+    }
+
+    /** 设置降比特（bits 1~16、down 1~32、mix 0~1）；mix=0 关闭 */
+    fun setBitcrusher(bits: Float, down: Float, mix: Float) {
+        if (!loaded) {
+            AppLogger.w("Engine", "setBitcrusher: JNI未加载，跳过")
+            return
+        }
+        nativeSetBitcrusher(bits, down, mix)
+    }
 
     // ============================================================
     // Pipeline 管理 JNI 声明（对齐 maidmic_jni.cpp）

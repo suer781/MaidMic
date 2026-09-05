@@ -44,6 +44,7 @@ import androidx.core.content.ContextCompat
 import java.io.File
 import java.util.UUID
 import aoeck.dwyai.com.AppLogger
+import aoeck.dwyai.com.AudioEngine
 import aoeck.dwyai.com.NativeAudioProcessor
 
 /**
@@ -65,6 +66,12 @@ class VoicePackRecorder(private val context: Context) {
         // 与 native pipeline 的处理粒度对齐，平衡延迟与 CPU 开销。
         private const val PROCESS_BLOCK_SAMPLES = 1024
         private const val PROCESS_BLOCK_BYTES = PROCESS_BLOCK_SAMPLES * 2 // 2048
+
+        // 录音结束后的排空块数：变声引擎 v3（TD-PSOLA + 抽取域共振峰）有
+        // 约 82ms 流级延迟（输出流滞后输入流），混响/回声也有尾音。
+        // 不排空的话每条语音包结尾约 0.1s 的内容（最后一个字的尾音）
+        // 会留在管线缓冲里丢失。8 块 = 8192 样本 ≈ 170ms，覆盖充分。
+        private const val DRAIN_BLOCKS = 8
     }
 
     /**
@@ -230,30 +237,44 @@ class VoicePackRecorder(private val context: Context) {
             // ---- 录音 + 变声 + 写盘循环 ----
             val inBuf = ByteArray(PROCESS_BLOCK_BYTES)
             val outBuf = ByteArray(PROCESS_BLOCK_BYTES)
-            while (recording) {
-                val read = recorder.read(inBuf, 0, PROCESS_BLOCK_BYTES)
-                when {
-                    read > 0 -> {
-                        // 逐块变声处理（与录音在同一线程串行执行）
-                        NativeAudioProcessor.processAudio(inBuf, outBuf, read)
-                        // 只写入实际读到的字节数（read 可能 < PROCESS_BLOCK_BYTES）
-                        writer.writePcm16(if (read == PROCESS_BLOCK_BYTES) outBuf else outBuf.copyOf(read))
-                    }
-                    read == 0 -> {
-                        // 罕见，继续读
-                    }
-                    else -> {
-                        // read < 0：错误码
-                        if (read == AudioRecord.ERROR_INVALID_OPERATION) {
-                            // 通常是 stop 被调用，正常退出
+                while (recording) {
+                    val read = recorder.read(inBuf, 0, PROCESS_BLOCK_BYTES)
+                    when {
+                        read > 0 -> {
+                            // 逐块变声处理（与录音在同一线程串行执行）
+                            NativeAudioProcessor.processAudio(inBuf, outBuf, read)
+                            // 只写入实际读到的字节数（read 可能 < PROCESS_BLOCK_BYTES）
+                            writer.writePcm16(if (read == PROCESS_BLOCK_BYTES) outBuf else outBuf.copyOf(read))
+                        }
+                        read == 0 -> {
+                            // 罕见，继续读
+                        }
+                        else -> {
+                            // read < 0：错误码
+                            if (read == AudioRecord.ERROR_INVALID_OPERATION) {
+                                // 通常是 stop 被调用，正常退出
+                                break
+                            }
+                            AppLogger.e(TAG, "录音读取错误: read=$read")
+                            mainHandler.post { cb.onError("录音读取错误 (code=$read)") }
                             break
                         }
-                        AppLogger.e(TAG, "录音读取错误: read=$read")
-                        mainHandler.post { cb.onError("录音读取错误 (code=$read)") }
-                        break
                     }
                 }
-            }
+
+                // ---- 排空 DSP 延迟线（变声 v3 必需）----
+                // 录音结束后继续送全零块，把仍在管线缓冲中的音频尾段
+                // （约 82ms 流级延迟 + 混响/回声尾音）冲出到 WAV，
+                // 否则语音包结尾会被截掉。直通引擎无需排空。
+                if (NativeAudioProcessor.getEngine() == AudioEngine.ECHIO_EQ) {
+                    val drainIn = ByteArray(PROCESS_BLOCK_BYTES)  // 全零 = S16 静音
+                    val drainOut = ByteArray(PROCESS_BLOCK_BYTES)
+                    repeat(DRAIN_BLOCKS) {
+                        NativeAudioProcessor.processAudio(drainIn, drainOut, PROCESS_BLOCK_BYTES)
+                        writer.writePcm16(drainOut)
+                    }
+                    AppLogger.i(TAG, "延迟线已排空（$DRAIN_BLOCKS 块）")
+                }
         } catch (e: Exception) {
             AppLogger.e(TAG, "录音线程异常", e)
             mainHandler.post { cb.onError("录音异常: ${e.message}") }
@@ -365,10 +386,10 @@ class VoicePackRecorder(private val context: Context) {
      * 从 SharedPreferences("maidmic_eq") 读取当前 DSP 参数，构造 ChainSnapshot。
      *
      * 模块 ID 与 BUILTIN_MODULES (ui/editor/ModuleChainEditor.kt) 对齐：
-     *   1=Gain, 3=Compressor, 4=Pitch, 5=Reverb, 7=Distortion,
-     *   11=Bass, 12=Treble, 13=Formant, 14=Echo
+     *   1=Gain, 3=Compressor, 5=Reverb, 7=Distortion, 11=Bass, 12=Treble,
+     *   14=Echo, 15=VoiceTransform（变声核心 v3），20=Bitcrusher
      *
-     * 参数 key 与 C++ 端 set_eq_params / set_compressor_params 完全对齐。
+     * 参数 key 与 C++ 端模块 set_param 完全对齐。
      */
     private fun captureChainSnapshot(): ChainSnapshot {
         val prefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
@@ -390,12 +411,6 @@ class VoicePackRecorder(private val context: Context) {
                 "comp_ratio" to prefs.getFloat("comp_ratio", 0f),
                 "comp_makeup" to prefs.getFloat("comp_makeup", 0f),
             ),
-            bypass = false,
-        )
-        // 4=Pitch Shift: pitch_semitones（prefs 存为 Int）
-        modules += ModuleState(
-            moduleId = 4,
-            params = mapOf("pitch_semitones" to prefs.getInt("pitch", 0).toFloat()),
             bypass = false,
         )
         // 5=Reverb: reverb_mix
@@ -422,18 +437,31 @@ class VoicePackRecorder(private val context: Context) {
             params = mapOf("treble_db" to prefs.getFloat("treble", 0f)),
             bypass = false,
         )
-        // 13=Formant: formant_shift
-        modules += ModuleState(
-            moduleId = 13,
-            params = mapOf("formant_shift" to prefs.getFloat("formant", 0f)),
-            bypass = false,
-        )
         // 14=Echo: echo_delay_ms / echo_decay
         modules += ModuleState(
             moduleId = 14,
             params = mapOf(
                 "echo_delay_ms" to prefs.getFloat("echo_delay", 0f),
                 "echo_decay" to prefs.getFloat("echo_decay", 0f),
+            ),
+            bypass = false,
+        )
+        // 15=VoiceTransform（变声核心 v3）: pitch_semitones / formant_shift
+        modules += ModuleState(
+            moduleId = 15,
+            params = mapOf(
+                "pitch_semitones" to prefs.getInt("pitch", 0).toFloat(),
+                "formant_shift" to prefs.getFloat("formant", 0f),
+            ),
+            bypass = false,
+        )
+        // 20=Bitcrusher: 机器人预设启用（无独立持久化，快照记默认关闭）
+        modules += ModuleState(
+            moduleId = 20,
+            params = mapOf(
+                "bitcrush_bits" to 16f,
+                "bitcrush_down" to 1f,
+                "bitcrush_mix" to 0f,
             ),
             bypass = false,
         )

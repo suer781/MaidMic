@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.core.LinearEasing
@@ -92,16 +93,34 @@ private data class VoicePreset(
     val pitch: Int,
     val formant: Float,
     val distortion: Float,
-    val clearAll: Boolean = false  // 原声预设：清零所有效果
+    val clearAll: Boolean = false,  // 原声预设：清零所有效果
+    val bitcrush: Boolean = false   // 机器人预设：启用降比特模块
 )
 
-/** 五个预设：萝莉 / 大叔 / 机器人 / 原声 / 自定义 */
+/** 自定义预设索引 */
+private const val PRESET_CUSTOM = 5
+
+/**
+ * 六个预设：萝莉 / 御姐 / 大叔 / 机器人 / 原声 / 自定义
+ *
+ * 参数依据人声变换研究基线（Praat "Change gender" 与语音转换文献）：
+ *   男→女：F0 ×1.5~1.7（+7~+9 半音）、共振峰 ×1.1~1.2（+2~+3 半音），
+ *   两者须同时偏移才有可信的性别变换；引擎 v3 的 PSOLA/极点旋转
+ *   支持大幅偏移而不破音，预设取值相应放大。
+ */
 private val VOICE_PRESETS = listOf(
-    VoicePreset("萝莉", 0, pitch = 4, formant = 2f, distortion = 0f),
-    VoicePreset("大叔", 1, pitch = -4, formant = -2f, distortion = 0f),
-    VoicePreset("机器人", 2, pitch = 0, formant = 0f, distortion = 0.3f),
-    VoicePreset("原声", 3, pitch = 0, formant = 0f, distortion = 0f, clearAll = true),
-    VoicePreset("自定义", 4, pitch = 0, formant = 0f, distortion = 0f),
+    // 萝莉：高音高 + 上移共振峰（童声声道短）
+    VoicePreset("萝莉", 0, pitch = 7, formant = 3.0f, distortion = 0f),
+    // 御姐：成熟女声，轻度上移
+    VoicePreset("御姐", 1, pitch = 3, formant = 1.5f, distortion = 0f),
+    // 大叔：压低音高 + 下移共振峰（男声声道长）
+    VoicePreset("大叔", 2, pitch = -5, formant = -3.0f, distortion = 0f),
+    // 机器人：平坦音色 + 失真 + 降比特（ metallic 质感）
+    VoicePreset("机器人", 3, pitch = 0, formant = 0f, distortion = 0.35f, bitcrush = true),
+    // 原声：清零所有效果
+    VoicePreset("原声", 4, pitch = 0, formant = 0f, distortion = 0f, clearAll = true),
+    // 自定义：保留当前参数
+    VoicePreset("自定义", 5, pitch = 0, formant = 0f, distortion = 0f),
 )
 
 // ============================================================
@@ -139,7 +158,30 @@ fun VoiceChangePage(
     // ---------- 变声参数状态（从存储恢复） ----------
     var pitch by remember { mutableIntStateOf(eqPrefs.getInt("pitch", 0)) }
     var formant by remember { mutableFloatStateOf(eqPrefs.getFloat("formant", 0f)) }
-    var selectedPreset by remember { mutableIntStateOf(eqPrefs.getInt("preset", 4)) }
+    var selectedPreset by remember {
+        // 预设列表 v3 重排（萝莉/御姐/大叔/机器人/原声/自定义）。
+        // 旧版存储索引（萝莉0/大叔1/机器人2/原声3/自定义4）需一次性迁移到新索引，
+        // 避免老用户升级后选中错误的预设芯片。
+        val newKey = "preset_v3"
+        val migrated = if (eqPrefs.contains(newKey)) {
+            eqPrefs.getInt(newKey, PRESET_CUSTOM)
+        } else if (eqPrefs.contains("preset")) {
+            val old = eqPrefs.getInt("preset", PRESET_CUSTOM)
+            // 旧→新映射：萝莉0→0，大叔1→2，机器人2→3，原声3→4，自定义4→5
+            val mapped = when (old) {
+                0 -> 0
+                1 -> 2
+                2 -> 3
+                3 -> 4
+                else -> PRESET_CUSTOM
+            }
+            eqPrefs.edit().putInt(newKey, mapped).apply()
+            mapped
+        } else {
+            PRESET_CUSTOM
+        }
+        mutableIntStateOf(migrated)
+    }
 
     // ---------- 试听状态管理 ----------
     var testState by remember { mutableStateOf(TestState.IDLE) }
@@ -224,16 +266,16 @@ fun VoiceChangePage(
         val preset = VOICE_PRESETS[index]
         selectedPreset = index
 
-        if (index == 4) {
+        if (index == PRESET_CUSTOM) {
             // 自定义：不改变当前参数，仅记录预设选择
-            eqPrefs.edit().putInt("preset", index).apply()
+            eqPrefs.edit().putInt("preset_v3", index).apply()
             return
         }
 
         // 设置 pitch / formant（及 distortion / 清零）
         pitch = preset.pitch
         formant = preset.formant
-        val editor = eqPrefs.edit().putInt("preset", index)
+        val editor = eqPrefs.edit().putInt("preset_v3", index)
         if (preset.clearAll) {
             // 原声：清零所有效果参数
             editor.putFloat("gain", 0f)
@@ -247,16 +289,22 @@ fun VoiceChangePage(
             editor.putFloat("distortion", preset.distortion)
         }
         editor.apply()
+        // 降比特模块：机器人预设启用，其余预设关闭（自动旁路，零开销）
+        if (preset.bitcrush) {
+            NativeAudioProcessor.setBitcrusher(bits = 10f, down = 3f, mix = 0.85f)
+        } else {
+            NativeAudioProcessor.setBitcrusher(bits = 16f, down = 1f, mix = 0f)
+        }
         // 推送参数到引擎（读取含刚写入的 distortion 等）
         pushParams(preset.pitch, preset.formant)
-        AppLogger.i("VoiceChange", "应用预设: ${preset.name} pitch=${preset.pitch} formant=${preset.formant} dist=${preset.distortion}")
+        AppLogger.i("VoiceChange", "应用预设: ${preset.name} pitch=${preset.pitch} formant=${preset.formant} dist=${preset.distortion} bitcrush=${preset.bitcrush}")
     }
 
     // ---------- 手动调节时切换为自定义预设 ----------
     fun switchToCustomIfPreset() {
-        if (selectedPreset != 4) {
-            selectedPreset = 4
-            eqPrefs.edit().putInt("preset", 4).apply()
+        if (selectedPreset != PRESET_CUSTOM) {
+            selectedPreset = PRESET_CUSTOM
+            eqPrefs.edit().putInt("preset_v3", PRESET_CUSTOM).apply()
         }
     }
 
@@ -295,7 +343,9 @@ fun VoiceChangePage(
             )
             Spacer(Modifier.height(MaidMicSpacing.xs))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(MaidMicSpacing.xs)
             ) {
                 VOICE_PRESETS.forEach { preset ->
@@ -303,7 +353,7 @@ fun VoiceChangePage(
                         label = preset.name,
                         selected = selectedPreset == preset.index,
                         onClick = { applyPreset(preset.index) },
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier
                     )
                 }
             }

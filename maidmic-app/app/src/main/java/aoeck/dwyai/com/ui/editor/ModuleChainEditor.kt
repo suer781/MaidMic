@@ -76,18 +76,24 @@ enum class ParamType { FLOAT, INT, BOOL, STRING }
 // 内置 DSP 模块列表
 // ============================================================
 // 模块 ID 与 maidmic-engine/include/maidmic/module.h 完全对齐。
-// 仅保留 native 实际实现的 9 个模块（lookup_module_by_id 中存在的）。
-// Chorus(6)/Delay(8)/NoiseGate(9)/Limiter(10)/EQ(2) 未在 native 实现，已移除。
+// 含变声核心 v3（VoiceTransform）与新效果模块（Vibrato/Chorus/Bitcrusher/
+// NoiseGate/Limiter）。仅 EQ(2)/Delay(8) 未在 native 实现，保持移除。
 val BUILTIN_MODULES = listOf(
+    DspModuleInfo(15, "VoiceTransform", "变声核心 v3：PSOLA 变调 + 极点旋转共振峰。", "🎭"),
     DspModuleInfo(1,  "Gain",        "调整音量增益。", "🔊"),
     DspModuleInfo(3,  "Compressor",  "动态范围压缩。", "📉"),
-    DspModuleInfo(4,  "Pitch Shift", "变调（PSOLA，半音单位）。", "🎵"),
-    DspModuleInfo(5,  "Reverb",      "空间混响。", "🌊"),
+    DspModuleInfo(4,  "Pitch Shift", "旧版变调（拼接式，兼容备用）。", "🎵"),
+    DspModuleInfo(5,  "Reverb",      "Freeverb 式空间混响。", "🌊"),
     DspModuleInfo(7,  "Distortion",  "失真效果。", "🔥"),
     DspModuleInfo(11, "Bass",        "低音 Shelving 滤波。", "🔈"),
     DspModuleInfo(12, "Treble",      "高音 Shelving 滤波。", "🔉"),
-    DspModuleInfo(13, "Formant",     "共振峰偏移。", "🗣"),
+    DspModuleInfo(13, "Formant",     "旧版共振峰（倾斜滤波，兼容备用）。", "🗣"),
     DspModuleInfo(14, "Echo",        "回声/延迟。", "⏳"),
+    DspModuleInfo(19, "Vibrato",     "颤音（音高周期调制）。", "〰"),
+    DspModuleInfo(6,  "Chorus",      "三路调制合唱。", "🎼"),
+    DspModuleInfo(20, "Bitcrusher",  "降比特/降采样 Lo-Fi（机器人音色）。", "🕹"),
+    DspModuleInfo(9,  "NoiseGate",   "噪声门（RMS + 迟滞）。", "🚪"),
+    DspModuleInfo(10, "Limiter",     "限制器（峰值钳制）。", "🧱"),
 )
 
 /** 按 ID 查找内置模块信息 */
@@ -137,6 +143,33 @@ fun getDefaultParams(moduleId: Int): MutableList<DspParam> = when (moduleId) {
     14 -> mutableListOf(  // Echo
         DspParam("echo_delay_ms", "延迟 Delay", ParamType.FLOAT, 0f, 0f, 2000f, "ms"),
         DspParam("echo_decay", "衰减 Decay", ParamType.FLOAT, 0f, 0f, 0.9f, ""),
+    )
+    15 -> mutableListOf(  // VoiceTransform（变声核心 v3）
+        DspParam("pitch_semitones", "变调 Pitch", ParamType.FLOAT, 0f, -12f, 12f, "st"),
+        DspParam("formant_shift", "共振峰 Formant", ParamType.FLOAT, 0f, -12f, 12f, "st"),
+    )
+    19 -> mutableListOf(  // Vibrato
+        DspParam("vibrato_rate", "速率 Rate", ParamType.FLOAT, 5f, 0.1f, 10f, "Hz"),
+        DspParam("vibrato_depth", "深度 Depth", ParamType.FLOAT, 0.3f, 0f, 2f, "st"),
+    )
+    6 -> mutableListOf(   // Chorus
+        DspParam("chorus_mix", "混合 Mix", ParamType.FLOAT, 0.3f, 0f, 1f, ""),
+        DspParam("chorus_rate", "速率 Rate", ParamType.FLOAT, 1.2f, 0.1f, 5f, "Hz"),
+        DspParam("chorus_depth", "深度 Depth", ParamType.FLOAT, 2.5f, 0f, 10f, "ms"),
+    )
+    20 -> mutableListOf(  // Bitcrusher
+        DspParam("bitcrush_bits", "位深 Bits", ParamType.FLOAT, 16f, 1f, 16f, "bit"),
+        DspParam("bitcrush_down", "降采样 Down", ParamType.FLOAT, 1f, 1f, 32f, "x"),
+        DspParam("bitcrush_mix", "混合 Mix", ParamType.FLOAT, 0f, 0f, 1f, ""),
+    )
+    9 -> mutableListOf(   // NoiseGate
+        DspParam("gate_threshold", "阈值 Threshold", ParamType.FLOAT, -50f, -80f, -20f, "dB"),
+        DspParam("gate_attack", "开启 Attack", ParamType.FLOAT, 5f, 0f, 100f, "ms"),
+        DspParam("gate_release", "释放 Release", ParamType.FLOAT, 200f, 10f, 1000f, "ms"),
+    )
+    10 -> mutableListOf(  // Limiter
+        DspParam("limiter_threshold", "阈值 Threshold", ParamType.FLOAT, -1f, -12f, 0f, "dB"),
+        DspParam("limiter_release", "释放 Release", ParamType.FLOAT, 100f, 1f, 1000f, "ms"),
     )
     else -> mutableListOf()
 }

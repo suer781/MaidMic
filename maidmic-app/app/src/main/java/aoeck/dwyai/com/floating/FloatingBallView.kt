@@ -1,26 +1,28 @@
-// FloatingBallView.kt — 悬浮球自定义 View
+// FloatingBallView.kt — 悬浮球自定义 View（交互 v2）
 // ============================================================
-// Task 8.1 ~ 8.4:
-//  - 56dp 圆形悬浮球，传统 View（非 Compose），通过 WindowManager 挂载
-//  - 光影渐变球体：RadialGradient 模拟左上高光 + 右下暗部，立体感
-//  - 三态色：IDLE(紫) / RECORDING(红呼吸) / READY_TO_PLAY(绿)
-//  - OnTouchListener 拖动框架：超 16dp 阈值标记拖动，ACTION_UP 未拖动则触发点击
+// 56dp 圆形悬浮球，传统 View（非 Compose），通过 WindowManager 挂载。
 //
-// Task 9: 四手势识别（核心）
-//  - 单击：展开/收起面板（onExpandPanel / onCollapsePanel）
-//  - 双击：播放最近语音包（仅绿色态有效，非绿色态球抖动提示）
-//  - 长按（holdDurationMs 默认 3000，可配置 500~5000）：
-//      震动×2 → 球变红呼吸 → 开始 PTT 录音 → 松手 → 继续录 0.5s → 停止
-//  - 绿色态长按：覆盖重录当前录音（同 PTT 流程，overwrite=true）
+// 光影渐变球体：RadialGradient 模拟左上高光 + 右下暗部，立体感。
+// 三态色：IDLE(紫) / RECORDING(红呼吸) / READY_TO_PLAY(绿)。
 //
-// 手势优先级：拖动 > 长按 > 双击 > 单击
-//   - ACTION_MOVE 超阈值 → 立即取消长按和点击定时器
-//   - 长按已触发 → 忽略后续移动（录音中不拖动）
-//   - 单击需延迟 300ms 确认无第二次点击（双击间隔 < 300ms）
+// ===== 交互 v2（手势模型）=====
+//   - 单击（立即响应，无延迟）：
+//       * 绿色态（有新包未听）→ 播放最近语音包（贴合"绿球=待播放"语义）
+//       * 其他态 → 展开/收起面板
+//   - 长按（默认 600ms，可配置 500~5000）：按住时绘制进度弧，
+//       转满一圈 → 震动×2 → 球变红呼吸 → 开始 PTT 录音 → 松手续录 0.5s 停止
+//       绿色态长按 = 覆盖重录（overwrite=true）
+//   - 拖动（>16dp）：移动位置，松手后吸附到最近的左右边缘（弹性动画），
+//       位置持久化（重启恢复）；IDLE 态贴边后自动半透明（触摸恢复）
+//   - 双击手势已移除（它是单击 300ms 延迟的根源，播放由绿色态单击承接）
 //
-// 注意：本 View 不直接操作 WindowManager，由 FloatingBallService 创建并 addView。
-// View 仅持有 layoutParams / windowManager 引用，用于拖动时 updateViewLayout。
-// 录音/播放的实际逻辑通过 [BallInteractionCallback] 委托给 Task 5 实现。
+// 手势优先级：拖动 > 长按 > 单击
+//   - ACTION_MOVE 超阈值 → 立即取消长按与进度弧
+//   - 长按已触发（录音中）→ 忽略后续移动
+//
+// 注意：本 View 不直接操作 WindowManager 生命周期，由 FloatingBallService 创建并 addView。
+// View 仅持有 layoutParams / windowManager 引用，用于拖动/吸附时 updateViewLayout。
+// 录音/播放的实际逻辑通过 [BallInteractionCallback] 委托给 Service 实现。
 
 package aoeck.dwyai.com.floating
 
@@ -41,11 +43,12 @@ import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.view.animation.LinearInterpolator
 import kotlin.math.hypot
 
 /**
- * 悬浮球自定义 View。
+ * 悬浮球自定义 View（交互 v2）。
  *
  * 用法（在 FloatingBallService 中）：
  * ```kotlin
@@ -53,7 +56,7 @@ import kotlin.math.hypot
  * val params = FloatingBallView.buildLayoutParams(this)
  * view.wmLayoutParams = params
  * view.windowManager = windowManager
- * view.interactionCallback = myCallback  // Task 9: 注入交互回调
+ * view.interactionCallback = myCallback
  * windowManager.addView(view, params)
  * view.setState(FloatingBallView.BallState.IDLE)
  * ```
@@ -74,22 +77,34 @@ class FloatingBallView(context: Context) : View(context) {
         const val BREATH_ALPHA_MIN = 0.4f
         const val BREATH_ALPHA_MAX = 1.0f
 
-        // ===== Task 9: 手势识别参数 =====
-        /** 长按触发默认时长（ms） */
-        const val HOLD_DURATION_DEFAULT_MS = 3000L
+        // ===== 手势参数（交互 v2）=====
+        /** 长按触发默认时长（ms）：600ms ≈ 微信按住说话级响应 */
+        const val HOLD_DURATION_DEFAULT_MS = 600L
         /** 长按触发最小时长（ms） */
         const val HOLD_DURATION_MIN_MS = 500L
         /** 长按触发最大时长（ms） */
         const val HOLD_DURATION_MAX_MS = 5000L
-        /** 双击间隔阈值（ms）：两次点击间隔 < 此值视为双击 */
-        const val DOUBLE_CLICK_TIMEOUT_MS = 300L
         /** 松手续录时长（ms）：用户松手后继续录 0.5s */
         const val RELEASE_CONTINUE_RECORD_MS = 500L
+
+        /** 边缘吸附动画时长（ms） */
+        private const val SNAP_DURATION_MS = 220L
+        /** 吸附后与屏幕边缘的间距（px 由 dp 换算） */
+        private const val EDGE_MARGIN_DP = 6f
+        /** 贴边半透明透明度（IDLE 态） */
+        private const val EDGE_DIM_ALPHA = 0.55f
+        /** 长按进度弧线宽（dp） */
+        private const val PROGRESS_STROKE_DP = 2.5f
+        /** 长按按住时的放大上限（相对 1.0） */
+        private const val PRESS_SCALE_MAX = 1.08f
 
         /** SharedPreferences 文件名 */
         private const val PREFS_NAME = "maidmic_prefs"
         /** 长按时长持久化 key */
         private const val KEY_HOLD_DURATION_MS = "hold_duration_ms"
+        /** 球位置持久化 key（吸附后的 x/y） */
+        private const val KEY_BALL_X = "floating_ball_x"
+        private const val KEY_BALL_Y = "floating_ball_y"
 
         /**
          * 构造 WindowManager.LayoutParams：
@@ -97,15 +112,28 @@ class FloatingBallView(context: Context) : View(context) {
          *  - FLAG_NOT_FOCUSABLE：不抢焦点
          *  - FLAG_LAYOUT_NO_LIMITS：允许超出屏幕边界（拖动到边缘时不会被裁剪）
          *  - 格式 TRANSLUCENT：半透明，让球体边缘渐变自然
-         *  - 初始位置：屏幕右侧中间偏上
+         *  - 初始位置：优先恢复上次吸附保存的位置；无记录时屏幕右侧 1/3 处
          */
         fun buildLayoutParams(context: Context): WindowManager.LayoutParams {
             val size = dpToPx(context, BALL_SIZE_DP).toInt()
             val dm = context.resources.displayMetrics
-            // 初始 X：屏幕右侧，留 8dp 边距
-            val initialX = dm.widthPixels - size - dpToPx(context, 8f).toInt()
-            // 初始 Y：屏幕高度 1/3（中间偏上）
-            val initialY = (dm.heightPixels * 0.33f).toInt()
+            val margin = dpToPx(context, EDGE_MARGIN_DP).toInt()
+
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val savedX = prefs.getInt(KEY_BALL_X, Int.MIN_VALUE)
+            val savedY = prefs.getInt(KEY_BALL_Y, Int.MIN_VALUE)
+
+            val initialX: Int
+            val initialY: Int
+            if (savedX != Int.MIN_VALUE && savedY != Int.MIN_VALUE) {
+                // 恢复上次位置（clamp 进屏幕，防止分辨率变化后跑出屏外）
+                initialX = savedX.coerceIn(0, (dm.widthPixels - size).coerceAtLeast(0))
+                initialY = savedY.coerceIn(dpToPx(context, 24f).toInt(),
+                    (dm.heightPixels - size - dpToPx(context, 24f).toInt()).coerceAtLeast(0))
+            } else {
+                initialX = dm.widthPixels - size - margin
+                initialY = (dm.heightPixels * 0.33f).toInt()
+            }
 
             return WindowManager.LayoutParams().apply {
                 type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -135,6 +163,13 @@ class FloatingBallView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeWidth = dpToPx(1.2f)
     }
+    /** 长按进度弧画笔 */
+    private val progressPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = dpToPx(PROGRESS_STROKE_DP)
+        strokeCap = Paint.Cap.ROUND
+        color = 0x99FFFFFF.toInt()
+    }
 
     /** 边缘细圈基础透明度（非录制态也保持半透明，避免硬白圈） */
     private val rimBaseAlpha = 0.66f
@@ -160,15 +195,15 @@ class FloatingBallView(context: Context) : View(context) {
     /** 当前 View 在 WindowManager 中的 LayoutParams，由 Service 注入 */
     var wmLayoutParams: WindowManager.LayoutParams? = null
 
-    // ===== Task 9: 交互回调 =====
-    /** 交互回调（手势 → 动作委托，由 Service 注入，Task 5 接线实现） */
+    // ===== 交互回调 =====
+    /** 交互回调（手势 → 动作委托，由 Service 注入） */
     var interactionCallback: BallInteractionCallback? = null
 
     /** 拖动回调，参数为当前 rawX / rawY（保留用于位置日志） */
     var onDrag: ((x: Float, y: Float) -> Unit)? = null
 
-    // ===== Task 9: 长按时长配置 =====
-    /** 长按触发时长（ms），从 SharedPreferences 读取，默认 3000 */
+    // ===== 长按时长配置 =====
+    /** 长按触发时长（ms），从 SharedPreferences 读取，默认 600 */
     var holdDurationMs: Long = HOLD_DURATION_DEFAULT_MS
         private set
 
@@ -203,12 +238,33 @@ class FloatingBallView(context: Context) : View(context) {
         // 半径留出描边宽度，避免边缘被裁
         val radius = (minOf(width, height) / 2f) - rimPaint.strokeWidth
 
+        // 按住时轻微放大（进度反馈的一部分）
+        if (pressScale > 1.001f) {
+            canvas.save()
+            canvas.scale(pressScale, pressScale, cx, cy)
+            drawBall(canvas, cx, cy, radius)
+            canvas.restore()
+        } else {
+            drawBall(canvas, cx, cy, radius)
+        }
+
+        // 长按进度弧：从顶部（-90°）顺时针绘制，转满一圈触发录音
+        if (pressProgress > 0.001f) {
+            val arcRadius = radius - progressPaint.strokeWidth
+            canvas.drawArc(
+                cx - arcRadius, cy - arcRadius, cx + arcRadius, cy + arcRadius,
+                -90f, 360f * pressProgress, false, progressPaint
+            )
+        }
+    }
+
+    /** 绘制球体本体（高光渐变 + 亮点 + 边圈），供普通/放大两分支复用 */
+    private fun drawBall(canvas: Canvas, cx: Float, cy: Float, radius: Float) {
         // 高光中心偏移：左上方向，模拟光源从左上方照射球体
         val highlightOffsetX = -radius * 0.35f
         val highlightOffsetY = -radius * 0.35f
 
         // 主球体：径向渐变（高光色 → 中心色 → 边缘暗色）
-        // 渐变半径略大于球半径，保证边缘最暗处不被截断
         // bodyPaint 使用 shader，paint.alpha 作为全局透明度乘子（与呼吸效果联动）
         bodyPaint.alpha = (breathAlpha * 255).toInt().coerceIn(0, 255)
         bodyPaint.shader = RadialGradient(
@@ -250,8 +306,7 @@ class FloatingBallView(context: Context) : View(context) {
      * - RECORDING: 红色光影渐变 + 呼吸闪烁（透明度 0.4↔1.0，400ms 周期）
      * - READY_TO_PLAY: 绿色光影渐变，持续显示
      *
-     * Task 9: 当状态从 RECORDING 切换到 IDLE 或 READY_TO_PLAY 时，
-     * 自动重置录音周期标志（isRecordingActive / isLongPressTriggered），
+     * 状态切回 IDLE / READY_TO_PLAY 时自动结束录音周期标志，
      * 允许新的手势。
      */
     fun setState(state: BallState) {
@@ -259,29 +314,30 @@ class FloatingBallView(context: Context) : View(context) {
         currentState = state
         when (state) {
             BallState.IDLE -> {
-                // 主题紫色调
                 highlightColor = Color.parseColor("#FFF3E5F5")
                 centerColor = Color.parseColor("#FFCE93D8")
                 edgeColor = Color.parseColor("#FF4A2561")
                 stopBreath()
-                // 录音周期结束（Task 5 调用 setState(IDLE) 表示播放完成）
                 isRecordingActive = false
                 isLongPressTriggered = false
+                // IDLE 态若贴边 → 恢复半透明省视线（延迟一帧让状态切换先可见）
+                if (isDockedNearEdge) {
+                    postDelayed({ dimToEdge() }, 300L)
+                }
             }
             BallState.RECORDING -> {
-                // 红色调 + 呼吸
                 highlightColor = Color.parseColor("#FFFFCDD2")
                 centerColor = Color.parseColor("#FFEF5350")
                 edgeColor = Color.parseColor("#FFB71C1C")
                 startBreath()
+                // 录音中始终保持全亮（状态可见性优先）
+                animate().alpha(1f).setDuration(120L).start()
             }
             BallState.READY_TO_PLAY -> {
-                // 绿色调（有未播放的最新语音包）
                 highlightColor = Color.parseColor("#FFC8E6C9")
                 centerColor = Color.parseColor("#FF66BB6A")
                 edgeColor = Color.parseColor("#FF1B5E20")
                 stopBreath()
-                // 录音周期结束（Task 5 调用 setState(READY_TO_PLAY) 表示录音+处理完成）
                 isRecordingActive = false
                 isLongPressTriggered = false
             }
@@ -289,11 +345,11 @@ class FloatingBallView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** 当前状态（供 Service / Task 9 查询） */
+    /** 当前状态（供 Service 查询） */
     fun getState(): BallState = currentState
 
     /**
-     * Task 10: 同步面板展开状态（供 Service 在面板被外部收起时调用）。
+     * 同步面板展开状态（供 Service 在面板被外部收起时调用）。
      *
      * 场景：面板因"点击面板外区域"或"拖动球"而收起时，Service 会调用此方法
      * 将 [isPanelExpanded] 置 false，使下次单击球能正确触发 onExpandPanel
@@ -327,17 +383,14 @@ class FloatingBallView(context: Context) : View(context) {
     }
 
     // ============================================================
-    // Task 9: 手势识别
+    // 手势识别（交互 v2）
     // ============================================================
 
-    // ===== Handler（主线程，用于长按/单击延迟检测）=====
+    // ===== Handler（主线程，用于长按延迟检测）=====
     private val handler = Handler(Looper.getMainLooper())
 
     /** 长按定时器 Runnable：到达 holdDurationMs 时触发 */
     private val longPressRunnable = Runnable { triggerLongPress() }
-
-    /** 单击确认 Runnable：延迟 300ms 后若无第二次点击则触发单击 */
-    private val singleClickRunnable = Runnable { handleSingleClick() }
 
     // ===== 手势状态 =====
     private var downRawX = 0f
@@ -350,8 +403,6 @@ class FloatingBallView(context: Context) : View(context) {
     private var isLongPressTriggered = false
     /** 录音周期是否进行中（长按触发 → 录音+处理+存包完成前为 true，阻止新手势） */
     private var isRecordingActive = false
-    /** 上次点击时间戳（用于双击检测） */
-    private var lastClickTime = 0L
     /** 面板是否已展开（单击切换） */
     private var isPanelExpanded = false
     /**
@@ -359,12 +410,20 @@ class FloatingBallView(context: Context) : View(context) {
      *
      * 背景：面板挂载时带 FLAG_WATCH_OUTSIDE_TOUCH，点击球（面板外）会先让面板
      * 收到 ACTION_OUTSIDE 而收起（collapsePanel → syncPanelExpanded(false)），
-     * 随后球自己的单击回调（300ms 延迟）再触发时 isPanelExpanded 已被置 false，
+     * 随后球自己的单击回调再触发时 isPanelExpanded 已被置 false，
      * 导致"想关面板却再次展开"（面板闪一下又出现）。
      *
      * 因此在按下时若面板已展开，标记本次点击为"关闭面板"动作，松手时直接忽略单击。
      */
     private var suppressClickOnUp = false
+    /** 球当前是否停靠在屏幕边缘（用于贴边半透明判断） */
+    private var isDockedNearEdge = false
+
+    // ===== 长按进度反馈 =====
+    /** 按住进度（0~1），驱动进度弧与按住放大 */
+    private var pressProgress = 0f
+    private var pressScale = 1f
+    private var pressAnimator: ValueAnimator? = null
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
@@ -375,9 +434,9 @@ class FloatingBallView(context: Context) : View(context) {
                 lastRawY = event.rawY
                 isDragging = false
                 isLongPressTriggered = false
-                // 面板已展开时，本次按下会触发面板"外部点击收起"；
-                // 标记抑制随后的单击，避免面板关闭后又被单击重新展开
-                suppressClickOnUp = isPanelExpanded
+
+                // 触摸即恢复全亮（贴边半透明态 → 激活）
+                if (alpha < 1f) animate().alpha(1f).setDuration(120L).start()
 
                 // 录音周期进行中（松手等待处理阶段）→ 忽略新手势
                 if (isRecordingActive) return true
@@ -385,8 +444,12 @@ class FloatingBallView(context: Context) : View(context) {
                 // 每次按下时刷新长按时长（用户可能在设置页修改过）
                 refreshHoldDuration()
 
-                // 启动长按检测定时器
+                // 取消进行中的吸附动画（用户要重新拿起球）
+                snapAnimator?.cancel()
+
+                // 启动长按检测定时器 + 进度弧动画
                 handler.postDelayed(longPressRunnable, holdDurationMs)
+                startPressFeedback()
             }
             MotionEvent.ACTION_MOVE -> {
                 // 长按已触发（录音中）→ 忽略移动，不进入拖动模式
@@ -394,13 +457,13 @@ class FloatingBallView(context: Context) : View(context) {
 
                 val dx = event.rawX - downRawX
                 val dy = event.rawY - downRawY
-                // 超过阈值才进入拖动模式（拖动优先：取消长按和点击定时器）
+                // 超过阈值才进入拖动模式（拖动优先：取消长按和进度弧）
                 if (!isDragging && hypot(dx, dy) > dragThresholdPx) {
                     isDragging = true
                     suppressClickOnUp = false
                     handler.removeCallbacks(longPressRunnable)
-                    handler.removeCallbacks(singleClickRunnable)
-                    // Task 10: 拖动开始时若面板已展开，先收起面板
+                    cancelPressFeedback()
+                    // 拖动开始时若面板已展开，先收起面板
                     // （面板不跟随球移动，拖动时直接收起避免面板悬空）
                     if (isPanelExpanded) {
                         isPanelExpanded = false
@@ -408,7 +471,7 @@ class FloatingBallView(context: Context) : View(context) {
                     }
                 }
                 if (isDragging) {
-                    // 增量移动：本次 MOVE 相对上一次的位移
+                    // 增量移动：本次 MOVE 相对上一次的位移，并 clamp 进屏幕
                     val deltaX = event.rawX - lastRawX
                     val deltaY = event.rawY - lastRawY
                     updatePosition(deltaX, deltaY)
@@ -424,21 +487,22 @@ class FloatingBallView(context: Context) : View(context) {
                 when {
                     // 优先级 1：长按已触发 → 松手停止录音
                     isLongPressTriggered -> {
-                        // 通知停止录音（delayMs=500 表示松手后延迟 0.5s 停止）
+                        // 通知停止录音（松手后继续录 0.5s 再停）
                         interactionCallback?.onStopRecording(RELEASE_CONTINUE_RECORD_MS)
                         isLongPressTriggered = false
                         isDragging = false
-                        // isRecordingActive 保持 true，直到 Task 5 调用 setState(READY_TO_PLAY)
+                        // isRecordingActive 保持 true，直到录音完成回调 setState
                     }
-                    // 优先级 2：拖动结束 → 不触发点击
+                    // 优先级 2：拖动结束 → 吸附到最近边缘，不触发点击
                     isDragging -> {
                         isDragging = false
+                        snapToNearestEdge()
                     }
                     // 优先级 3：录音周期进行中（松手等待阶段）→ 忽略点击
                     isRecordingActive -> {
                         // 忽略
                     }
-                    // 优先级 4：普通点击 → 区分单击 / 双击
+                    // 优先级 4：普通点击 → 立即响应（无双击等待延迟）
                     else -> {
                         if (suppressClickOnUp) {
                             // 面板已因"点击球"（面板外 WATCH_OUTSIDE_TOUCH）而收起，
@@ -446,26 +510,16 @@ class FloatingBallView(context: Context) : View(context) {
                             suppressClickOnUp = false
                             isPanelExpanded = false
                         } else {
-                            val now = System.currentTimeMillis()
-                            if (now - lastClickTime < DOUBLE_CLICK_TIMEOUT_MS) {
-                                // 双击：取消待执行的单击回调
-                                handler.removeCallbacks(singleClickRunnable)
-                                lastClickTime = 0
-                                handleDoubleClick()
-                            } else {
-                                // 可能是单击，延迟确认（300ms 内无第二次点击则触发单击）
-                                lastClickTime = now
-                                handler.removeCallbacks(singleClickRunnable)
-                                handler.postDelayed(singleClickRunnable, DOUBLE_CLICK_TIMEOUT_MS)
-                            }
+                            handleSingleClick()
                         }
                     }
                 }
+                cancelPressFeedback()
             }
             MotionEvent.ACTION_CANCEL -> {
                 // 清理所有定时器
                 handler.removeCallbacks(longPressRunnable)
-                handler.removeCallbacks(singleClickRunnable)
+                cancelPressFeedback()
                 isDragging = false
                 isLongPressTriggered = false
                 suppressClickOnUp = false
@@ -475,7 +529,7 @@ class FloatingBallView(context: Context) : View(context) {
     }
 
     // ============================================================
-    // Task 9: 手势处理方法
+    // 手势处理方法
     // ============================================================
 
     /**
@@ -492,6 +546,7 @@ class FloatingBallView(context: Context) : View(context) {
 
         isLongPressTriggered = true
         isRecordingActive = true
+        cancelPressFeedback()
 
         // 覆盖模式：绿色态长按 → 覆盖最近语音包
         val overwrite = (currentState == BallState.READY_TO_PLAY)
@@ -502,44 +557,153 @@ class FloatingBallView(context: Context) : View(context) {
         // 球变红呼吸闪烁
         setState(BallState.RECORDING)
 
-        // 开始 PTT 录音（委托给 Task 5 实现）
+        // 开始 PTT 录音（委托给 Service 实现）
         interactionCallback?.onStartRecording(overwrite)
     }
 
     /**
-     * 单击处理（singleClickRunnable 延迟 300ms 后触发）。
-     * 切换面板展开/收起状态。
+     * 单击处理（ACTION_UP 立即触发，无双击等待延迟）。
+     *
+     * - 绿色态（READY_TO_PLAY，有新包未听）→ 播放最近语音包
+     *   （录完 → 试听一步到位；播放开始后 Service 会把球切回紫色，
+     *    播放中再单击即正常开面板停止播放）
+     * - 其他态 → 切换面板展开/收起
      */
     private fun handleSingleClick() {
-        if (isPanelExpanded) {
-            // 面板已展开 → 收起
+        if (currentState == BallState.READY_TO_PLAY) {
+            interactionCallback?.onPlayLatest()
+        } else if (isPanelExpanded) {
             isPanelExpanded = false
             interactionCallback?.onCollapsePanel()
         } else {
-            // 面板未展开 → 展开
             isPanelExpanded = true
             interactionCallback?.onExpandPanel()
         }
     }
 
-    /**
-     * 双击处理。
-     * - 绿色态（READY_TO_PLAY）：播放最近语音包
-     * - 非绿色态：不触发播放，球轻微抖动提示
-     */
-    private fun handleDoubleClick() {
-        if (currentState == BallState.READY_TO_PLAY) {
-            // 绿色态：播放最近语音包
-            interactionCallback?.onPlayLatest()
-            // 播放完成后的状态切换由 Task 5 调用 setState(IDLE) 处理
-        } else {
-            // 非绿色态：球轻微抖动提示（不可播放）
-            shakeBall()
+    // ============================================================
+    // 长按进度反馈（进度弧 + 按住放大）
+    // ============================================================
+
+    /** 启动按住反馈动画：进度弧 0→1（时长=长按阈值），球轻微放大 */
+    private fun startPressFeedback() {
+        cancelPressFeedback()
+        pressAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = holdDurationMs
+            interpolator = LinearInterpolator()
+            addUpdateListener { a ->
+                val t = a.animatedValue as Float
+                pressProgress = t
+                pressScale = 1f + (PRESS_SCALE_MAX - 1f) * t
+                invalidate()
+            }
+            start()
+        }
+    }
+
+    /** 取消按住反馈，弧与缩放复位 */
+    private fun cancelPressFeedback() {
+        pressAnimator?.cancel()
+        pressAnimator = null
+        if (pressProgress != 0f || pressScale != 1f) {
+            pressProgress = 0f
+            pressScale = 1f
+            invalidate()
         }
     }
 
     // ============================================================
-    // Task 9.3: 震动×2
+    // 拖动 / 边缘吸附 / 位置持久化
+    // ============================================================
+
+    /** y 方向 clamp 范围（顶部/底部各留 24dp，避免球被拖出屏幕外） */
+    private fun minY(): Int = dpToPx(24f).toInt()
+    private fun maxY(): Int =
+        (resources.displayMetrics.heightPixels - ballSizePx - dpToPx(24f).toInt())
+            .coerceAtLeast(minY())
+
+    /** 拖动时更新 WindowManager 中 View 的位置（clamp 进屏幕） */
+    private fun updatePosition(deltaX: Float, deltaY: Float) {
+        val params = wmLayoutParams ?: return
+        val wm = windowManager ?: return
+        try {
+            params.x = (params.x + deltaX.toInt())
+                .coerceIn(0, (resources.displayMetrics.widthPixels - ballSizePx).coerceAtLeast(0))
+            params.y = (params.y + deltaY.toInt()).coerceIn(minY(), maxY())
+            isDockedNearEdge = false
+            wm.updateViewLayout(this, params)
+        } catch (e: Exception) {
+            // View 已被移除或 WindowManager 不可用时容错
+        }
+    }
+
+    /** 吸附动画引用（防止 GC 并支持取消） */
+    private var snapAnimator: ValueAnimator? = null
+
+    /**
+     * 松手后吸附到最近的左右边缘（y 保持当前位置，弹性减速动画）。
+     * 完成后持久化位置；IDLE 态贴边后自动半透明。
+     */
+    private fun snapToNearestEdge() {
+        val params = wmLayoutParams ?: return
+        val wm = windowManager ?: return
+        val dm = resources.displayMetrics
+        val margin = dpToPx(EDGE_MARGIN_DP).toInt()
+
+        val centerX = params.x + ballSizePx / 2
+        val targetX = if (centerX < dm.widthPixels / 2) {
+            margin
+        } else {
+            (dm.widthPixels - ballSizePx - margin).coerceAtLeast(0)
+        }
+        val targetY = params.y.coerceIn(minY(), maxY())
+
+        val startX = params.x
+        val startY = params.y
+        snapAnimator?.cancel()
+        snapAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = SNAP_DURATION_MS
+            interpolator = DecelerateInterpolator(1.6f)
+            addUpdateListener { a ->
+                val t = a.animatedValue as Float
+                params.x = (startX + (targetX - startX) * t).toInt()
+                params.y = (startY + (targetY - startY) * t).toInt()
+                try {
+                    wm.updateViewLayout(this@FloatingBallView, params)
+                } catch (_: Exception) {
+                }
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    isDockedNearEdge = true
+                    savePosition(params.x, params.y)
+                    // IDLE 态贴边 → 半透明省视线（录音/绿球态保持全亮）
+                    if (currentState == BallState.IDLE) dimToEdge()
+                }
+            })
+            start()
+        }
+    }
+
+    /** 贴边半透明（IDLE 态省视线；触摸即恢复） */
+    private fun dimToEdge() {
+        if (currentState != BallState.IDLE) return
+        // 用户正按住球（或延迟期间刚开始交互）时不降透明度
+        if (isPressed) return
+        animate().alpha(EDGE_DIM_ALPHA).setDuration(200L).start()
+    }
+
+    /** 持久化球位置（吸附完成后调用，重启恢复） */
+    private fun savePosition(x: Int, y: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_BALL_X, x)
+            .putInt(KEY_BALL_Y, y)
+            .apply()
+    }
+
+    // ============================================================
+    // 震动反馈
     // ============================================================
 
     /**
@@ -569,46 +733,17 @@ class FloatingBallView(context: Context) : View(context) {
         }
     }
 
-    // ============================================================
-    // Task 9.6: 球抖动动画（非绿色态双击提示）
-    // ============================================================
-
-    /** 抖动动画引用（防止 GC 并支持取消） */
-    private var shakeAnimator: ValueAnimator? = null
-
-    /** 球轻微抖动：左右快速偏移 3 次后回正，持续约 400ms（振幅 4dp） */
-    private fun shakeBall() {
-        shakeAnimator?.cancel()
-        val shakePx = dpToPx(4f)
-        shakeAnimator = ValueAnimator.ofFloat(0f, shakePx, -shakePx, shakePx, -shakePx, 0f).apply {
-            duration = 400L
-            addUpdateListener { animator ->
-                translationX = animator.animatedValue as Float
-            }
-            start()
-        }
-    }
-
-    /** 拖动时更新 WindowManager 中 View 的位置 */
-    private fun updatePosition(deltaX: Float, deltaY: Float) {
-        val params = wmLayoutParams ?: return
-        val wm = windowManager ?: return
-        try {
-            params.x += deltaX.toInt()
-            params.y += deltaY.toInt()
-            wm.updateViewLayout(this, params)
-        } catch (e: Exception) {
-            // View 已被移除或 WindowManager 不可用时容错
-        }
+    /** 拖动时更新位置的旧接口已并入 updatePosition（保留空实现兼容） */
+    private fun releaseInternal() {
+        stopBreath()
+        snapAnimator?.cancel()
+        pressAnimator?.cancel()
+        handler.removeCallbacks(longPressRunnable)
     }
 
     /** 释放资源（Service onDestroy 时调用） */
     fun release() {
-        stopBreath()
-        shakeAnimator?.cancel()
-        // 清理所有定时器，防止内存泄漏
-        handler.removeCallbacks(longPressRunnable)
-        handler.removeCallbacks(singleClickRunnable)
+        releaseInternal()
         windowManager = null
         wmLayoutParams = null
     }

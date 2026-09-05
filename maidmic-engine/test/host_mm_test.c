@@ -19,6 +19,7 @@
 //   cmake -B build-host && cmake --build build-host --target host_mm_test
 
 #include "maidmic/pipeline.h"
+#include "maidmic/pitch_detector.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -49,6 +50,9 @@ extern const maidmic_module_t maidmic_module_limiter;
 extern const maidmic_module_t maidmic_module_presence;
 extern const maidmic_module_t maidmic_module_autotune;
 extern const maidmic_module_t maidmic_module_voiceprint_mask;
+extern const maidmic_module_t maidmic_module_vibrato;
+extern const maidmic_module_t maidmic_module_chorus;
+extern const maidmic_module_t maidmic_module_bitcrush;
 
 // ============================================================
 // 测试常量
@@ -463,6 +467,479 @@ static bool pitch_continuity_test(void) {
 }
 
 // ============================================================
+// VoiceTransform v3 变调比例测试（TD-PSOLA）
+// ============================================================
+// 220Hz 谐波信号 → +7 半音：输出基频应 ≈ 220·2^(7/12) ≈ 329.6Hz（±5%）。
+// 同时验证输出有限（无 NaN/Inf、无爆炸）。
+
+#define VT_TEST_SR      48000u
+#define VT_TEST_BLOCK   256u
+#define VT_TEST_SECONDS 2u
+
+extern const maidmic_module_t maidmic_module_voice_transform;
+
+// 基频检测（复用引擎检测器，作用于指定段）
+static bool vt_f0_of(const float* x, uint32_t n, float* out_f0) {
+    bool voiced = false;
+    const float f0 = maidmic_detect_pitch(x, n, VT_TEST_SR, &voiced);
+    *out_f0 = f0;
+    return voiced;
+}
+
+// 单独管线跑 VoiceTransform：in → out（均为 total 样本，已分配）
+static bool vt_run(const float* in, float* out, uint32_t total, float pitch, float formant) {
+    maidmic_pipeline_t* p = maidmic_pipeline_create(MAIDMIC_PIPELINE_MODE_SIMPLE);
+    if (!p) return false;
+    const uint32_t node = maidmic_pipeline_add_module(p, &maidmic_module_voice_transform);
+    if (node == 0) {
+        maidmic_pipeline_destroy(p);
+        return false;
+    }
+    maidmic_param_t param;
+    memset(&param, 0, sizeof(param));
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.key = "pitch_semitones";
+    param.value.as_float = pitch;
+    maidmic_pipeline_set_param(p, node, "pitch_semitones", param);
+    param.key = "formant_shift";
+    param.value.as_float = formant;
+    maidmic_pipeline_set_param(p, node, "formant_shift", param);
+
+    float ib[VT_TEST_BLOCK], ob[VT_TEST_BLOCK];
+    maidmic_buffer_t bi, bo;
+    memset(&bi, 0, sizeof(bi));
+    memset(&bo, 0, sizeof(bo));
+    bi.data = ib;
+    bi.owned = false;
+    bi.meta.sample_rate = VT_TEST_SR;
+    bi.meta.channels = 1;
+    bi.meta.format = MAIDMIC_SAMPLE_F32;
+    bo.data = ob;
+    bo.owned = false;
+    bo.meta = bi.meta;
+
+    bool ok = true;
+    for (uint32_t off = 0; off < total; off += VT_TEST_BLOCK) {
+        uint32_t nn = (total - off < VT_TEST_BLOCK) ? total - off : VT_TEST_BLOCK;
+        memcpy(ib, in + off, nn * sizeof(float));
+        bi.meta.frame_count = nn;
+        bi.data_bytes = nn * sizeof(float);
+        bo.data_bytes = nn * sizeof(float);
+        bo.meta = bi.meta;
+        if (!maidmic_pipeline_process(p, &bi, &bo)) {
+            ok = false;
+            break;
+        }
+        for (uint32_t i = 0; i < nn; i++) {
+            if (!isfinite(ob[i])) {
+                printf("  失败：输出非有限值 %g @ %u\n", ob[i], (unsigned)(off + i));
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) break;
+        memcpy(out + off, ob, nn * sizeof(float));
+    }
+    maidmic_pipeline_destroy(p);
+    return ok;
+}
+
+// 谐波测试信号（含底噪，模拟真实语音激励）
+static uint32_t vt_rng = 0x12345678u;
+static float vt_noise(void) {
+    vt_rng = vt_rng * 1664525u + 1013904223u;
+    return ((float)((vt_rng >> 16) & 0xFFu) / 128.0f) - 1.0f;
+}
+static float vt_harmonic(uint64_t frame, float f0) {
+    const double t = (double)frame / (double)VT_TEST_SR;
+    double s = 0.0;
+    for (int k = 1; k <= 20; k++) {
+        s += sin(2.0 * M_PI * (double)f0 * (double)k * t) / (double)k;
+    }
+    return 0.25f * (float)s + 0.003f * vt_noise();
+}
+
+static bool vt_pitch_ratio_test(void) {
+    const uint32_t total = VT_TEST_SR * VT_TEST_SECONDS;
+    float* in = (float*)malloc(total * sizeof(float));
+    float* out = (float*)malloc(total * sizeof(float));
+    if (!in || !out) {
+        free(in); free(out);
+        return false;
+    }
+
+    // +7 半音：220 → 329.6Hz
+    for (uint64_t i = 0; i < total; i++) in[i] = vt_harmonic(i, 220.0f);
+    bool ok = vt_run(in, out, total, 7.0f, 0.0f);
+    float f0_in = 0.0f, f0_out = 0.0f;
+    const bool v_in = vt_f0_of(in + VT_TEST_SR, VT_TEST_SR, &f0_in);
+    const bool v_out = vt_f0_of(out + VT_TEST_SR, VT_TEST_SR, &f0_out);
+    const float expect = 220.0f * powf(2.0f, 7.0f / 12.0f);
+    printf("  变调 +7st: in_f0=%.1f(voiced=%d) out_f0=%.1f(voiced=%d) expect=%.1f\n",
+           f0_in, v_in, f0_out, v_out, expect);
+    if (!ok || !v_out || fabsf(f0_out - expect) > 0.05f * expect) {
+        printf("  失败：变调比例偏差过大\n");
+        ok = false;
+    }
+
+    // -5 半音：220 → 164.8Hz
+    for (uint64_t i = 0; i < total; i++) in[i] = vt_harmonic(i, 220.0f);
+    ok = vt_run(in, out, total, -5.0f, 0.0f) && ok;
+    vt_f0_of(out + VT_TEST_SR, VT_TEST_SR, &f0_out);
+    const float expect2 = 220.0f * powf(2.0f, -5.0f / 12.0f);
+    printf("  变调 -5st: out_f0=%.1f expect=%.1f\n", f0_out, expect2);
+    if (fabsf(f0_out - expect2) > 0.05f * expect2) {
+        printf("  失败：变调比例偏差过大\n");
+        ok = false;
+    }
+
+    free(in);
+    free(out);
+    return ok;
+}
+
+// ============================================================
+// VoiceTransform v3 共振峰偏移测试（抽取域极点旋转）
+// ============================================================
+// 双共振峰谐波信号（F1=400/F2=1600）+4 半音：输出包络峰应按
+// 2^(4/12) ≈ 1.26 移动（±20%）。用 Goertzel 能量找谱峰。
+
+// 在 [f_lo, f_hi] 内以 5Hz 步进 Goertzel 找能量峰
+static float vt_find_peak(const float* x, uint32_t n, float f_lo, float f_hi) {
+    float best_e = -1.0f, best_f = 0.0f;
+    for (float f = f_lo; f <= f_hi; f += 5.0f) {
+        const float w = 2.0f * (float)M_PI * f / (float)VT_TEST_SR;
+        const float coeff = 2.0f * cosf(w);
+        float s1 = 0.0f, s2 = 0.0f;
+        for (uint32_t i = 0; i < n; i++) {
+            const float s0 = x[i] + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        const float e = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        if (e > best_e) {
+            best_e = e;
+            best_f = f;
+        }
+    }
+    return best_f;
+}
+
+static float vt_formant_amp(float f, float F1, float F2) {
+    const float a1 = 1.0f / (1.0f + (f - F1) * (f - F1) / (120.0f * 120.0f));
+    const float a2 = 0.8f / (1.0f + (f - F2) * (f - F2) / (200.0f * 200.0f));
+    return a1 + a2;
+}
+
+static float vt_vowel(uint64_t frame, float f0, float F1, float F2) {
+    const double t = (double)frame / (double)VT_TEST_SR;
+    double s = 0.0;
+    for (int k = 1; k <= 60; k++) {
+        const float fk = f0 * (float)k;
+        if (fk > 0.45f * (float)VT_TEST_SR) break;
+        s += (double)vt_formant_amp(fk, F1, F2) * sin(2.0 * M_PI * (double)f0 * (double)k * t);
+    }
+    return 0.3f * (float)s + 0.003f * vt_noise();
+}
+
+static bool vt_formant_shift_test(void) {
+    const uint32_t total = VT_TEST_SR * VT_TEST_SECONDS;
+    float* in = (float*)malloc(total * sizeof(float));
+    float* out = (float*)malloc(total * sizeof(float));
+    if (!in || !out) {
+        free(in); free(out);
+        return false;
+    }
+
+    // +4 半音：F1 400 → 504Hz，F2 1600 → 2016Hz
+    for (uint64_t i = 0; i < total; i++) in[i] = vt_vowel(i, 120.0f, 400.0f, 1600.0f);
+    bool ok = vt_run(in, out, total, 0.0f, 4.0f);
+    const float pk_in1 = vt_find_peak(in + VT_TEST_SR, VT_TEST_SR, 250.0f, 700.0f);
+    const float pk_out1 = vt_find_peak(out + VT_TEST_SR, VT_TEST_SR, 250.0f, 900.0f);
+    const float expect1 = 400.0f * powf(2.0f, 4.0f / 12.0f);
+    printf("  共振峰 +4st F1: in=%.0f out=%.0f expect=%.0f\n", pk_in1, pk_out1, expect1);
+    if (!ok || fabsf(pk_out1 - expect1) > 0.2f * expect1) {
+        printf("  失败：F1 偏移偏差过大\n");
+        ok = false;
+    }
+
+    // -3 半音：F1 700 → 589Hz
+    for (uint64_t i = 0; i < total; i++) in[i] = vt_vowel(i, 140.0f, 700.0f, 1900.0f);
+    ok = vt_run(in, out, total, 0.0f, -3.0f) && ok;
+    const float pk_out2 = vt_find_peak(out + VT_TEST_SR, VT_TEST_SR, 350.0f, 700.0f);
+    const float expect2 = 700.0f * powf(2.0f, -3.0f / 12.0f);
+    printf("  共振峰 -3st F1: out=%.0f expect=%.0f\n", pk_out2, expect2);
+    if (fabsf(pk_out2 - expect2) > 0.2f * expect2) {
+        printf("  失败：F1 偏移偏差过大\n");
+        ok = false;
+    }
+
+    free(in);
+    free(out);
+    return ok;
+}
+
+// ============================================================
+// Reverb v2（Freeverb 式）稳定性测试
+// ============================================================
+// 单位脉冲 + 白噪声输入 5 秒：输出必须有界、有限，且输入停止后
+// 尾音能量单调衰减（前 0.5s 尾音能量 > 2s 后尾音能量）。
+
+static bool reverb_stability_test(void) {
+    const uint32_t total = VT_TEST_SR * 5u;
+    float* in = (float*)calloc(total, sizeof(float));
+    float* out = (float*)calloc(total, sizeof(float));
+    if (!in || !out) {
+        free(in); free(out);
+        return false;
+    }
+
+    vt_rng = 0x87654321u;
+    in[0] = 0.9f;  // 单位脉冲
+    for (uint32_t i = 1; i < VT_TEST_SR * 2u; i++) {
+        in[i] = 0.5f * vt_noise();  // 2 秒白噪声激励，之后静音观察尾音
+    }
+
+    maidmic_pipeline_t* p = maidmic_pipeline_create(MAIDMIC_PIPELINE_MODE_SIMPLE);
+    if (!p) {
+        free(in); free(out);
+        return false;
+    }
+    const uint32_t node = maidmic_pipeline_add_module(p, &maidmic_module_reverb);
+    if (node == 0) {
+        maidmic_pipeline_destroy(p);
+        free(in); free(out);
+        return false;
+    }
+    maidmic_param_t param;
+    memset(&param, 0, sizeof(param));
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.key = "reverb_mix";
+    param.value.as_float = 0.4f;
+    maidmic_pipeline_set_param(p, node, "reverb_mix", param);
+
+    float ib[VT_TEST_BLOCK], ob[VT_TEST_BLOCK];
+    maidmic_buffer_t bi, bo;
+    memset(&bi, 0, sizeof(bi));
+    memset(&bo, 0, sizeof(bo));
+    bi.data = ib; bi.owned = false;
+    bi.meta.sample_rate = VT_TEST_SR;
+    bi.meta.channels = 1;
+    bi.meta.format = MAIDMIC_SAMPLE_F32;
+    bo.data = ob; bo.owned = false; bo.meta = bi.meta;
+
+    bool ok = true;
+    double e_early = 0.0, e_late = 0.0;
+    for (uint32_t off = 0; off < total; off += VT_TEST_BLOCK) {
+        uint32_t nn = (total - off < VT_TEST_BLOCK) ? total - off : VT_TEST_BLOCK;
+        memcpy(ib, in + off, nn * sizeof(float));
+        bi.meta.frame_count = nn;
+        bi.data_bytes = nn * sizeof(float);
+        bo.data_bytes = nn * sizeof(float);
+        bo.meta = bi.meta;
+        if (!maidmic_pipeline_process(p, &bi, &bo)) {
+            ok = false;
+            break;
+        }
+        for (uint32_t i = 0; i < nn; i++) {
+            const float s = ob[i];
+            if (!isfinite(s) || fabsf(s) > 4.0f) {
+                printf("  失败：混响输出异常 %g @ %u\n", s, (unsigned)(off + i));
+                ok = false;
+                break;
+            }
+            // 尾音能量：输入停止（2s）后 0.2~0.7s vs 2.5~3.5s
+            const uint32_t abs_i = off + i;
+            if (abs_i > 2u * VT_TEST_SR + (uint32_t)(0.2f * VT_TEST_SR) &&
+                abs_i < 2u * VT_TEST_SR + (uint32_t)(0.7f * VT_TEST_SR)) {
+                e_early += (double)s * s;
+            }
+            if (abs_i > 2u * VT_TEST_SR + (uint32_t)(2.5f * VT_TEST_SR) &&
+                abs_i < 2u * VT_TEST_SR + (uint32_t)(3.5f * VT_TEST_SR)) {
+                e_late += (double)s * s;
+            }
+        }
+        if (!ok) break;
+        memcpy(out + off, ob, nn * sizeof(float));
+    }
+    maidmic_pipeline_destroy(p);
+
+    printf("  混响尾音能量: 早期=%.4g 后期=%.4g（应衰减）\n", e_early, e_late);
+    if (ok && e_early <= e_late) {
+        printf("  失败：尾音未正常衰减\n");
+        ok = false;
+    }
+
+    free(in);
+    free(out);
+    return ok;
+}
+
+// ============================================================
+// Vibrato / Chorus / Bitcrusher 基础行为测试
+// ============================================================
+
+// 单模块跑一段输入（mix/params 由调用方设置），返回输出 + 有限性检查
+typedef bool (*module_param_setup)(maidmic_pipeline_t* p, uint32_t node);
+
+static bool fx_run_module(const maidmic_module_t* mod, module_param_setup setup,
+                          const float* in, float* out, uint32_t total) {
+    maidmic_pipeline_t* p = maidmic_pipeline_create(MAIDMIC_PIPELINE_MODE_SIMPLE);
+    if (!p) return false;
+    const uint32_t node = maidmic_pipeline_add_module(p, mod);
+    if (node == 0 || (setup && !setup(p, node))) {
+        maidmic_pipeline_destroy(p);
+        return false;
+    }
+    float ib[VT_TEST_BLOCK], ob[VT_TEST_BLOCK];
+    maidmic_buffer_t bi, bo;
+    memset(&bi, 0, sizeof(bi));
+    memset(&bo, 0, sizeof(bo));
+    bi.data = ib; bi.owned = false;
+    bi.meta.sample_rate = VT_TEST_SR;
+    bi.meta.channels = 1;
+    bi.meta.format = MAIDMIC_SAMPLE_F32;
+    bo.data = ob; bo.owned = false; bo.meta = bi.meta;
+
+    bool ok = true;
+    for (uint32_t off = 0; off < total; off += VT_TEST_BLOCK) {
+        uint32_t nn = (total - off < VT_TEST_BLOCK) ? total - off : VT_TEST_BLOCK;
+        memcpy(ib, in + off, nn * sizeof(float));
+        bi.meta.frame_count = nn;
+        bi.data_bytes = nn * sizeof(float);
+        bo.data_bytes = nn * sizeof(float);
+        bo.meta = bi.meta;
+        if (!maidmic_pipeline_process(p, &bi, &bo)) {
+            ok = false;
+            break;
+        }
+        for (uint32_t i = 0; i < nn; i++) {
+            if (!isfinite(ob[i])) {
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) break;
+        memcpy(out + off, ob, nn * sizeof(float));
+    }
+    maidmic_pipeline_destroy(p);
+    return ok;
+}
+
+static bool fx_setup_vibrato(maidmic_pipeline_t* p, uint32_t node) {
+    maidmic_param_t param;
+    memset(&param, 0, sizeof(param));
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.key = "vibrato_depth";
+    param.value.as_float = 1.0f;  // ±1 半音
+    return maidmic_pipeline_set_param(p, node, "vibrato_depth", param);
+}
+
+static bool fx_setup_chorus(maidmic_pipeline_t* p, uint32_t node) {
+    maidmic_param_t param;
+    memset(&param, 0, sizeof(param));
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.key = "chorus_mix";
+    param.value.as_float = 0.8f;
+    return maidmic_pipeline_set_param(p, node, "chorus_mix", param);
+}
+
+static bool fx_setup_bitcrush(maidmic_pipeline_t* p, uint32_t node) {
+    maidmic_param_t param;
+    memset(&param, 0, sizeof(param));
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.key = "bitcrush_bits";
+    param.value.as_float = 4.0f;   // 4 bit：量化台阶 1/8
+    if (!maidmic_pipeline_set_param(p, node, "bitcrush_bits", param)) return false;
+    param.key = "bitcrush_mix";
+    param.value.as_float = 1.0f;
+    return maidmic_pipeline_set_param(p, node, "bitcrush_mix", param);
+}
+
+// 颤音：输出基频应随 LFO 波动（相邻窗口基频差 > 2%，验证调制生效）
+static bool fx_vibrato_test(void) {
+    const uint32_t total = VT_TEST_SR * 2u;
+    float* in = (float*)malloc(total * sizeof(float));
+    float* out = (float*)malloc(total * sizeof(float));
+    if (!in || !out) {
+        free(in); free(out);
+        return false;
+    }
+    for (uint64_t i = 0; i < total; i++) in[i] = vt_harmonic(i, 440.0f);
+    const bool ok = fx_run_module(&maidmic_module_vibrato, fx_setup_vibrato, in, out, total);
+    bool passed = ok;
+    if (passed) {
+        // 分四窗测基频，要求波动幅度 > 2%
+        float fmin = 1e9f, fmax = 0.0f;
+        for (uint32_t w = 0; w < 4u; w++) {
+            float f0 = 0.0f;
+            vt_f0_of(out + total / 2u + w * (VT_TEST_SR / 4u), VT_TEST_SR / 8u, &f0);
+            if (f0 > 0.0f) {
+                if (f0 < fmin) fmin = f0;
+                if (f0 > fmax) fmax = f0;
+            }
+        }
+        printf("  颤音基频波动: %.1f ~ %.1f Hz（±1 半音 ≈ ±26Hz）\n", fmin, fmax);
+        if (fmax - fmin < 8.0f) {
+            printf("  失败：颤音调制深度不足\n");
+            passed = false;
+        }
+    }
+    free(in);
+    free(out);
+    return passed;
+}
+
+// 合唱：输出非零、有界、与输入不同
+static bool fx_chorus_test(void) {
+    const uint32_t total = VT_TEST_SR;
+    float* in = (float*)malloc(total * sizeof(float));
+    float* out = (float*)malloc(total * sizeof(float));
+    if (!in || !out) {
+        free(in); free(out);
+        return false;
+    }
+    for (uint64_t i = 0; i < total; i++) in[i] = vt_harmonic(i, 300.0f);
+    const bool ok = fx_run_module(&maidmic_module_chorus, fx_setup_chorus, in, out, total);
+    double diff = 0.0;
+    for (uint32_t i = 0; i < total; i++) {
+        diff += fabs((double)out[i] - (double)in[i]);
+        if (fabsf(out[i]) > 2.0f) { diff = -1.0; break; }
+    }
+    printf("  合唱输出与输入平均差: %.4g\n", diff / total);
+    const bool passed = ok && diff > 0.0 && diff / total > 1e-4;
+    free(in);
+    free(out);
+    return passed;
+}
+
+// 降比特：4bit 全湿输出应落在量化台阶（1/8 的整数倍附近）
+static bool fx_bitcrush_test(void) {
+    const uint32_t total = VT_TEST_SR;
+    float* in = (float*)malloc(total * sizeof(float));
+    float* out = (float*)malloc(total * sizeof(float));
+    if (!in || !out) {
+        free(in); free(out);
+        return false;
+    }
+    for (uint64_t i = 0; i < total; i++) in[i] = vt_harmonic(i, 300.0f);
+    const bool ok = fx_run_module(&maidmic_module_bitcrush, fx_setup_bitcrush, in, out, total);
+    // 跳过启动 0.1s，检查量化：out·8 与最近整数偏差 ≤ 0.06（hold + 量化容差）
+    bool passed = ok;
+    double max_dev = 0.0;
+    for (uint32_t i = VT_TEST_SR / 10u; i < total; i++) {
+        const float q = out[i] * 8.0f;
+        const float dev = fabsf(q - floorf(q + 0.5f));
+        if (dev > max_dev) max_dev = dev;
+    }
+    printf("  降比特量化最大偏差: %.4f（应 ≈ 0）\n", max_dev);
+    if (max_dev > 0.06f) passed = false;
+    free(in);
+    free(out);
+    return passed;
+}
+
+// ============================================================
 // 用法说明
 // ============================================================
 static void print_usage(const char* argv0) {
@@ -648,6 +1125,24 @@ int main(int argc, char** argv) {
     // ---- Pitch 模块跨块连续性回归（核心"卡卡"修复验证）----
     printf("\nPitch 模块跨块连续性测试（256 帧块，对齐 App 实时块长）:\n");
     check_assert(pitch_continuity_test(), "Pitch 跨块连续（升调/降调，无块边界断裂）");
+
+    // ---- VoiceTransform v3：变调比例（TD-PSOLA）----
+    printf("\nVoiceTransform v3 变调比例测试（TD-PSOLA，共振峰保持）:\n");
+    check_assert(vt_pitch_ratio_test(), "VoiceTransform 变调比例（+7st/-5st，±5%）");
+
+    // ---- VoiceTransform v3：共振峰偏移（抽取域极点旋转）----
+    printf("\nVoiceTransform v3 共振峰偏移测试（抽取域 LPC 极点旋转）:\n");
+    check_assert(vt_formant_shift_test(), "VoiceTransform 共振峰偏移（+4st/-3st，±20%）");
+
+    // ---- Reverb v2：Freeverb 式稳定性 ----
+    printf("\nReverb v2 稳定性测试（8 组合器 + 4 全通）:\n");
+    check_assert(reverb_stability_test(), "Reverb 输出有界且尾音衰减");
+
+    // ---- 新效果模块 ----
+    printf("\nVibrato / Chorus / Bitcrusher 行为测试:\n");
+    check_assert(fx_vibrato_test(), "Vibrato 音高调制生效");
+    check_assert(fx_chorus_test(), "Chorus 输出有效且与输入不同");
+    check_assert(fx_bitcrush_test(), "Bitcrusher 4bit 量化台阶正确");
 
     // ---- 收尾：reset 后销毁，释放内存 ----
     maidmic_pipeline_reset(pipe);

@@ -53,6 +53,9 @@ set(ENGINE_DSP_SRC
     src/dsp/noisegate.c
     src/dsp/limiter.c
     src/dsp/presence.c
+    src/dsp/vibrato.c
+    src/dsp/chorus.c
+    src/dsp/bitcrush.c
 )
 
 # 人声处理模块（变声 / 声纹 / 自动修音等）
@@ -60,6 +63,7 @@ set(ENGINE_DSP_SRC
 set(ENGINE_VOICE_SRC
     src/voice/lpc.c
     src/voice/pitch_detector.c
+    src/voice/psola.c
     src/voice/voice_transform.c
     src/voice/autotune.c
     src/voice/voiceprint_mask.c

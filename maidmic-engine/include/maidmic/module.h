@@ -39,6 +39,8 @@ extern "C" {
 #define MAIDMIC_MODULE_ID_VOICEPRINT_MASK 16   // 声纹脱敏
 #define MAIDMIC_MODULE_ID_PRESENCE   17   // 人声存在感
 #define MAIDMIC_MODULE_ID_AUTOTUNE   18   // 自动修音
+#define MAIDMIC_MODULE_ID_VIBRATO    19   // 颤音
+#define MAIDMIC_MODULE_ID_BITCRUSH   20   // 降比特/低保真
 #define MAIDMIC_MODULE_ID_LUA        999  // Lua 插件模块 (通用代理)
 
 // ============================================================

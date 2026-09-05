@@ -46,6 +46,11 @@ extern const maidmic_module_t maidmic_module_voice_transform;
 extern const maidmic_module_t maidmic_module_voiceprint_mask;
 extern const maidmic_module_t maidmic_module_autotune;
 
+// 变声 v3 新增效果模块（Vibrato/Chorus/Bitcrusher）
+extern const maidmic_module_t maidmic_module_vibrato;
+extern const maidmic_module_t maidmic_module_chorus;
+extern const maidmic_module_t maidmic_module_bitcrush;
+
 // ============================================================
 // 新模块 ID 宏（module.h 尚未定义，各模块描述符中直接使用字面量 15/16/17/18）
 // 此处补齐宏；若未来 module.h 补充同名宏，则直接沿用头文件定义。
@@ -61,6 +66,12 @@ extern const maidmic_module_t maidmic_module_autotune;
 #endif
 #ifndef MAIDMIC_MODULE_ID_AUTOTUNE
 #define MAIDMIC_MODULE_ID_AUTOTUNE 18
+#endif
+#ifndef MAIDMIC_MODULE_ID_VIBRATO
+#define MAIDMIC_MODULE_ID_VIBRATO 19
+#endif
+#ifndef MAIDMIC_MODULE_ID_BITCRUSH
+#define MAIDMIC_MODULE_ID_BITCRUSH 20
 #endif
 
 // ============================================================
@@ -84,6 +95,9 @@ static const maidmic_module_t* lookup_module_by_id(uint32_t id) {
         case MAIDMIC_MODULE_ID_VOICE_TRANSFORM:  return &maidmic_module_voice_transform;
         case MAIDMIC_MODULE_ID_VOICEPRINT_MASK:  return &maidmic_module_voiceprint_mask;
         case MAIDMIC_MODULE_ID_AUTOTUNE:   return &maidmic_module_autotune;
+        case MAIDMIC_MODULE_ID_CHORUS:     return &maidmic_module_chorus;
+        case MAIDMIC_MODULE_ID_VIBRATO:    return &maidmic_module_vibrato;
+        case MAIDMIC_MODULE_ID_BITCRUSH:   return &maidmic_module_bitcrush;
         default: return NULL;
     }
 }
@@ -93,9 +107,11 @@ static const maidmic_module_t* lookup_module_by_id(uint32_t id) {
 // ============================================================
 // 在 JNI_OnLoad 或首次使用时创建。
 // 默认链（与 Kotlin PipelineController.DEFAULT_CHAIN 一致，双链统一）：
-//   Gain → Compressor → Bass → Treble → Reverb → Pitch → Formant → Distortion → Echo
-// 不再预置 NoiseGate/Limiter/VoiceTransform 与可选模块（AutoTune/VoiceprintMask/Presence），
-// 如需启用由 Kotlin 侧动态挂载（当前 UI 均不使用）。
+//   Gain → Compressor → Bass → Treble → Reverb → VoiceTransform
+//   → Distortion → Echo → Bitcrusher(bypass)
+// 变声核心为 VoiceTransform(15)（TD-PSOLA 变调 + 极点旋转共振峰偏移），
+// 替代旧 Pitch(4)+Formant(13)；旧模块仍注册，可在编辑器中手动挂载。
+// Bitcrusher 预置但旁路（机器人预设经 nativeSetBitcrusher 启用）。
 
 // Task 4：默认管线现同时被 UI 线程（模块链编辑，经 nativePipeline* 操作本句柄）
 // 与录音线程（nativeProcessAudio 的 process）访问。pipeline.c 未加锁，
@@ -104,8 +120,7 @@ static const maidmic_module_t* lookup_module_by_id(uint32_t id) {
 static maidmic_pipeline_t* g_default_pipeline = NULL;
 
 // 默认管线中各模块的节点 ID（用于参数设置）
-// 注意：noisegate/voice_transform/limiter/autotune/voiceprint_mask/presence 不再预置，
-// 以下字段仅在对应模块被 Kotlin 侧动态挂载后由 resolve_default_node 重新解析填充。
+// 注意：vibrato/chorus 等未预置；动态挂载后由 resolve_default_node 解析。
 static struct {
     uint32_t gain;
     uint32_t noisegate;      // 未预置；动态挂载后解析
@@ -113,16 +128,19 @@ static struct {
     uint32_t bass;
     uint32_t treble;
     uint32_t reverb;
-    uint32_t pitch;          // id 4（预置链与 Kotlin DEFAULT_CHAIN 均含）
-    uint32_t formant;        // id 13（预置链与 Kotlin DEFAULT_CHAIN 均含）
-    uint32_t voice_transform;// 未预置；动态挂载后解析
+    uint32_t pitch;          // id 4（旧模块；编辑器手动挂载时兼容）
+    uint32_t formant;        // id 13（同上）
+    uint32_t voice_transform;// id 15（预置，变声核心）
     uint32_t distortion;
     uint32_t echo;
     uint32_t limiter;        // 未预置；动态挂载后解析
+    uint32_t bitcrush;       // id 20（预置但旁路）
     // 可选模块节点（未预置；动态挂载后解析）
     uint32_t autotune;       // id 18
     uint32_t voiceprint_mask;// id 16
     uint32_t presence;       // id 17
+    uint32_t vibrato;        // id 19
+    uint32_t chorus;         // id 6
 } g_default_nodes;
 
 static void ensure_default_pipeline(void) {
@@ -133,20 +151,22 @@ static void ensure_default_pipeline(void) {
         return;
     }
     // 默认链（与 Kotlin PipelineController.DEFAULT_CHAIN 完全一致，消除双链不一致）：
-    //   Gain → Compressor → Bass → Treble → Reverb → Pitch → Formant → Distortion → Echo
-    // 注意：不再预置 NoiseGate/Limiter/VoiceTransform 及可选模块（AutoTune/VoiceprintMask/
-    // Presence）。这些模块当前 UI 不使用；如未来需要，由 Kotlin 侧经 nativePipelineAddModule
-    // 动态挂载，保证"编辑器链 == 录音处理链"唯一。
-    g_default_nodes.gain           = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_gain);
-    g_default_nodes.compressor     = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_compressor);
-    g_default_nodes.bass           = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_bass);
-    g_default_nodes.treble         = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_treble);
-    g_default_nodes.reverb         = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_reverb);
-    g_default_nodes.pitch          = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_pitch);
-    g_default_nodes.formant        = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_formant);
-    g_default_nodes.distortion     = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_distortion);
-    g_default_nodes.echo           = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_echo);
-    LOGI("Default pipeline created: Gain→Comp→Bass→Treble→Reverb→Pitch→Formant→Dist→Echo (9 modules, = Kotlin DEFAULT_CHAIN)");
+    //   Gain → Compressor → Bass → Treble → Reverb → VoiceTransform
+    //   → Distortion → Echo → Bitcrusher(bypass)
+    g_default_nodes.gain            = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_gain);
+    g_default_nodes.compressor      = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_compressor);
+    g_default_nodes.bass            = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_bass);
+    g_default_nodes.treble          = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_treble);
+    g_default_nodes.reverb          = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_reverb);
+    g_default_nodes.voice_transform = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_voice_transform);
+    g_default_nodes.distortion      = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_distortion);
+    g_default_nodes.echo            = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_echo);
+    g_default_nodes.bitcrush        = maidmic_pipeline_add_module(g_default_pipeline, &maidmic_module_bitcrush);
+    // Bitcrusher 预置但旁路：机器人预设启用，其余场景零开销直通
+    if (g_default_nodes.bitcrush) {
+        maidmic_pipeline_set_module_bypass(g_default_pipeline, g_default_nodes.bitcrush, true);
+    }
+    LOGI("Default pipeline created: Gain→Comp→Bass→Treble→Reverb→VoiceTransform(v3)→Dist→Echo→Bitcrush(bypass) (9 modules, = Kotlin DEFAULT_CHAIN)");
 }
 
 // ============================================================
@@ -249,15 +269,25 @@ void set_eq_params(float gain_db, float bass_db, float treble_db,
     param.value.as_float = clamp(reverb_mix, 0.0f, 1.0f);
     set_default_param(MAIDMIC_MODULE_ID_REVERB, &g_default_nodes.reverb, "reverb_mix", param);
 
-    // Pitch/Formant → 变声模块。默认管线（预置链与 Kotlin DEFAULT_CHAIN 一致）
-    // 上挂载的是独立 Pitch(4)+Formant(13)，此处只写这两个模块。
+    // 变调/共振峰 → VoiceTransform(15)（v3 变声核心）。
+    // 若 VoiceTransform 已被编辑器移除，回退到旧 Pitch(4)+Formant(13)（兼容模式）。
     param.type = MAIDMIC_PARAM_FLOAT;
-    param.value.as_float = clamp((float)pitch_semitones, -12.0f, 12.0f);
-    set_default_param(MAIDMIC_MODULE_ID_PITCH, &g_default_nodes.pitch, "pitch_semitones", param);
+    const uint32_t vt_node = resolve_default_node(MAIDMIC_MODULE_ID_VOICE_TRANSFORM,
+                                                  &g_default_nodes.voice_transform);
+    if (vt_node) {
+        param.value.as_float = clamp((float)pitch_semitones, -12.0f, 12.0f);
+        maidmic_pipeline_set_param(g_default_pipeline, vt_node, "pitch_semitones", param);
 
-    // Formant
-    param.value.as_float = clamp(formant_shift, -12.0f, 12.0f);
-    set_default_param(MAIDMIC_MODULE_ID_FORMANT, &g_default_nodes.formant, "formant_shift", param);
+        param.value.as_float = clamp(formant_shift, -12.0f, 12.0f);
+        maidmic_pipeline_set_param(g_default_pipeline, vt_node, "formant_shift", param);
+    } else {
+        // 兼容回退：旧独立 Pitch + Formant 模块
+        param.value.as_float = clamp((float)pitch_semitones, -12.0f, 12.0f);
+        set_default_param(MAIDMIC_MODULE_ID_PITCH, &g_default_nodes.pitch, "pitch_semitones", param);
+
+        param.value.as_float = clamp(formant_shift, -12.0f, 12.0f);
+        set_default_param(MAIDMIC_MODULE_ID_FORMANT, &g_default_nodes.formant, "formant_shift", param);
+    }
 
     // Distortion
     param.value.as_float = clamp(distortion, 0.0f, 1.0f);
@@ -331,6 +361,94 @@ void set_limiter_params(float threshold_db, float release_ms) {
 
     param.value.as_float = clamp(release_ms, 1.0f, 1000.0f);
     set_default_param(MAIDMIC_MODULE_ID_LIMITER, &g_default_nodes.limiter, "limiter_release", param);
+}
+
+// ============================================================
+// 可选效果模块动态挂载 + 参数设置（Vibrato / Chorus / Bitcrusher）
+// ============================================================
+// 模块不在默认管线中时自动挂载到链尾（用户经编辑器删除后再次调用即重新挂载）。
+// Kotlin 侧 initDefaultChain 重建链后镜像不含动态挂载模块，挂载即重新生效。
+
+// 确保模块在默认管线中，返回节点 ID（失败返回 0）
+static uint32_t ensure_module_mounted(uint32_t module_id, uint32_t* cached) {
+    ensure_default_pipeline();
+    if (!g_default_pipeline) return 0;
+
+    uint32_t node = resolve_default_node(module_id, cached);
+    if (node) return node;
+
+    // 未挂载：追加到链尾
+    const maidmic_module_t* module = lookup_module_by_id(module_id);
+    if (!module) return 0;
+    node = maidmic_pipeline_add_module(g_default_pipeline, module);
+    if (node != 0) {
+        *cached = node;
+        LOGI("ensure_module_mounted: module %u mounted as node %u", module_id, node);
+    }
+    return node;
+}
+
+void set_vibrato_params(float rate_hz, float depth_st, bool enabled) {
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_VIBRATO, &g_default_nodes.vibrato);
+    if (!node) {
+        LOGE("set_vibrato_params: vibrato module unavailable");
+        return;
+    }
+
+    maidmic_param_t param;
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.value.as_float = clamp(rate_hz, 0.1f, 10.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "vibrato_rate", param);
+
+    param.value.as_float = clamp(depth_st, 0.0f, 2.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "vibrato_depth", param);
+
+    maidmic_pipeline_set_module_bypass(g_default_pipeline, node, enabled ? false : true);
+}
+
+void set_chorus_params(float mix, float rate_hz, float depth_ms) {
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_CHORUS, &g_default_nodes.chorus);
+    if (!node) {
+        LOGE("set_chorus_params: chorus module unavailable");
+        return;
+    }
+
+    maidmic_param_t param;
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.value.as_float = clamp(mix, 0.0f, 1.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "chorus_mix", param);
+
+    param.value.as_float = clamp(rate_hz, 0.1f, 5.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "chorus_rate", param);
+
+    param.value.as_float = clamp(depth_ms, 0.0f, 10.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "chorus_depth", param);
+
+    // mix = 0 视为关闭（自动旁路）
+    maidmic_pipeline_set_module_bypass(g_default_pipeline, node, mix <= 0.003f);
+}
+
+void set_bitcrush_params(float bits, float down, float mix) {
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_BITCRUSH, &g_default_nodes.bitcrush);
+    if (!node) {
+        LOGE("set_bitcrush_params: bitcrush module unavailable");
+        return;
+    }
+
+    maidmic_param_t param;
+    param.type = MAIDMIC_PARAM_FLOAT;
+    param.value.as_float = clamp(bits, 1.0f, 16.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "bitcrush_bits", param);
+
+    param.value.as_float = clamp(down, 1.0f, 32.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "bitcrush_down", param);
+
+    param.value.as_float = clamp(mix, 0.0f, 1.0f);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "bitcrush_mix", param);
+
+    // mix = 0（或两维度全开）视为关闭（自动旁路，录音链零开销）
+    const bool off = mix <= 0.003f || (bits >= 15.5f && down <= 1.5f);
+    maidmic_pipeline_set_module_bypass(g_default_pipeline, node, off);
 }
 
 // ============================================================
@@ -424,6 +542,45 @@ Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetLimiter(
     jfloat threshold_db, jfloat release_ms) {
     (void)env; (void)clazz;
     set_limiter_params(threshold_db, release_ms);
+}
+
+// ============================================================
+// JNI: 设置颤音（Vibrato）参数（变声 v3 新增，可选模块）
+// ============================================================
+// 模块不在链中时自动挂载；enabled=false 时旁路。
+
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetVibrato(
+    JNIEnv* env, jclass clazz,
+    jfloat rate_hz, jfloat depth_st, jboolean enabled) {
+    (void)env; (void)clazz;
+    set_vibrato_params(rate_hz, depth_st, enabled ? true : false);
+}
+
+// ============================================================
+// JNI: 设置合唱（Chorus）参数（变声 v3 新增，可选模块）
+// ============================================================
+// mix = 0 视为关闭（自动旁路）。
+
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetChorus(
+    JNIEnv* env, jclass clazz,
+    jfloat mix, jfloat rate_hz, jfloat depth_ms) {
+    (void)env; (void)clazz;
+    set_chorus_params(mix, rate_hz, depth_ms);
+}
+
+// ============================================================
+// JNI: 设置降比特（Bitcrusher）参数（变声 v3 新增，预置但默认旁路）
+// ============================================================
+// mix = 0（或 bits≥16 且 down=1）视为关闭（自动旁路，零开销）。
+
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetBitcrusher(
+    JNIEnv* env, jclass clazz,
+    jfloat bits, jfloat down, jfloat mix) {
+    (void)env; (void)clazz;
+    set_bitcrush_params(bits, down, mix);
 }
 
 // ============================================================

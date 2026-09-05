@@ -29,24 +29,29 @@ object PipelineController {
     // ============================================================
     const val MODULE_GAIN = 1                  // 增益
     const val MODULE_COMPRESSOR = 3            // 压缩器
-    const val MODULE_PITCH = 4                 // 变调
+    const val MODULE_PITCH = 4                 // 变调（旧版 PSOLA 拼接，编辑器可选）
+    const val MODULE_CHORUS = 6                // 合唱
     const val MODULE_REVERB = 5                // 混响
     const val MODULE_DISTORTION = 7            // 失真
     const val MODULE_BASS = 11                 // 低音 Shelving
     const val MODULE_TREBLE = 12               // 高音 Shelving
-    const val MODULE_FORMANT = 13              // 共振峰偏移
+    const val MODULE_FORMANT = 13              // 共振峰偏移（旧版，编辑器可选）
     const val MODULE_ECHO = 14                 // 回声/延迟
+    const val MODULE_VOICE_TRANSFORM = 15      // 变声核心 v3（TD-PSOLA + 极点旋转共振峰）
+    const val MODULE_VIBRATO = 19              // 颤音
+    const val MODULE_BITCRUSHER = 20           // 降比特（机器人音色）
 
     // ============================================================
     // 默认模块链顺序（编辑器链，initDefaultChain 重建默认管线时按此挂载）
     // ============================================================
-    // Gain → Compressor → Bass → Treble → Reverb → Pitch → Formant → Distortion → Echo
-    // 注意：此链与 C++ ensure_default_pipeline 预置链完全一致（双链统一）。
-    // initDefaultChain 会清空 C++ 预置模块再按本链重建，
-    // 因此录音处理链与编辑器链始终保持一致。
+    // Gain → Compressor → Bass → Treble → Reverb → VoiceTransform(v3)
+    //   → Distortion → Echo → Bitcrusher
+    // 与 C++ ensure_default_pipeline 预置链完全一致（双链统一）。
+    // 变声参数（pitch/formant）由 nativeSetEqParams 映射到 VoiceTransform。
     val DEFAULT_CHAIN = listOf(
         MODULE_GAIN, MODULE_COMPRESSOR, MODULE_BASS, MODULE_TREBLE,
-        MODULE_REVERB, MODULE_PITCH, MODULE_FORMANT, MODULE_DISTORTION, MODULE_ECHO
+        MODULE_REVERB, MODULE_VOICE_TRANSFORM, MODULE_DISTORTION, MODULE_ECHO,
+        MODULE_BITCRUSHER
     )
 
     // C++ ensure_default_pipeline 预置模块数（9 个，与 DEFAULT_CHAIN 一致）。
@@ -224,12 +229,19 @@ object PipelineController {
                 MODULE_BASS -> mutableMapOf("bass_db" to bassDb)
                 MODULE_TREBLE -> mutableMapOf("treble_db" to trebleDb)
                 MODULE_REVERB -> mutableMapOf("reverb_mix" to reverbMix)
-                MODULE_PITCH -> mutableMapOf("pitch_semitones" to pitchSemitones)
-                MODULE_FORMANT -> mutableMapOf("formant_shift" to formantShift)
+                MODULE_VOICE_TRANSFORM -> mutableMapOf(
+                    "pitch_semitones" to pitchSemitones,
+                    "formant_shift" to formantShift
+                )
                 MODULE_DISTORTION -> mutableMapOf("distortion" to distortion)
                 MODULE_ECHO -> mutableMapOf(
                     "echo_delay_ms" to echoDelayMs,
                     "echo_decay" to echoDecay
+                )
+                MODULE_BITCRUSHER -> mutableMapOf(
+                    "bitcrush_bits" to 16f,
+                    "bitcrush_down" to 1f,
+                    "bitcrush_mix" to 0f
                 )
                 else -> mutableMapOf()
             }
@@ -417,10 +429,12 @@ object PipelineController {
         MODULE_BASS -> mapOf("bass_db" to 0f)
         MODULE_TREBLE -> mapOf("treble_db" to 0f)
         MODULE_REVERB -> mapOf("reverb_mix" to 0f)
-        MODULE_PITCH -> mapOf("pitch_semitones" to 0f)
-        MODULE_FORMANT -> mapOf("formant_shift" to 0f)
+        MODULE_VOICE_TRANSFORM -> mapOf("pitch_semitones" to 0f, "formant_shift" to 0f)
         MODULE_DISTORTION -> mapOf("distortion" to 0f)
         MODULE_ECHO -> mapOf("echo_delay_ms" to 0f, "echo_decay" to 0f)
+        MODULE_BITCRUSHER -> mapOf("bitcrush_bits" to 16f, "bitcrush_down" to 1f, "bitcrush_mix" to 0f)
+        MODULE_VIBRATO -> mapOf("vibrato_rate" to 5f, "vibrato_depth" to 0.3f)
+        MODULE_CHORUS -> mapOf("chorus_mix" to 0.3f, "chorus_rate" to 1.2f, "chorus_depth" to 2.5f)
         else -> emptyMap()
     }
 
@@ -435,6 +449,10 @@ object PipelineController {
         MODULE_TREBLE -> "Treble"
         MODULE_FORMANT -> "Formant"
         MODULE_ECHO -> "Echo"
+        MODULE_VOICE_TRANSFORM -> "VoiceTransform"
+        MODULE_BITCRUSHER -> "Bitcrusher"
+        MODULE_VIBRATO -> "Vibrato"
+        MODULE_CHORUS -> "Chorus"
         else -> "Module($moduleId)"
     }
 }

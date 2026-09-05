@@ -20,20 +20,23 @@
 | 语音包外放（音板） | ✅ | VoicePackPlayer |
 | 悬浮球快捷面板 | ✅ | EQ/变声开关、长按录音 |
 
-### 行业变声器常见功能盘点
+### 行业变声器常见功能盘点（2026-09 DSP v3 大修后）
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| **Formant Shifting** (共振峰偏移) | ✅ 已实现 | Shelving filter 补偿，±12 半音，默认链已含 |
+| **Gender Voice Conversion** (性别变声) | ✅ 已实现 | VoiceTransform v3：TD-PSOLA 变调 + 抽取域 LPC 极点旋转共振峰，音高/音色独立控制 |
+| **Formant Shifting** (共振峰偏移) | ✅ 已实现 | 真极点角度缩放（±12 半音），替代旧 Shelving 近似 |
 | **Distortion** (失真) | ✅ 已实现 | 软削波 waveshaping，0~1 驱动量 |
-| **Echo/Delay** (回声) | ✅ 已实现 | 反馈延迟线，最长 500ms |
-| **Noise Gate** (噪声门) | ✅ 已实现 | noisegate.c 已完成，未预置默认链，UI 未接入 |
+| **Echo/Delay** (回声) | ✅ 已实现 | 反馈延迟线，最长 2000ms |
+| **Reverb** (混响) | ✅ 已升级 | Freeverb 式（8 组合器 + 4 全通 + 阻尼），替代单延迟线 |
+| **Noise Gate** (噪声门) | ✅ 已实现 | noisegate.c，编辑器可挂载 |
+| **Limiter** (限制器) | ✅ 已实现 | Look-ahead 峰值钳制 |
+| **Vibrato** (颤音) | ✅ 新增 | 延时线音高调制（0.1~10Hz / 0~2 半音） |
+| **Chorus** (合唱) | ✅ 新增 | 三路调制延迟（0/120/240° 相位） |
+| **Bitcrushing** (降比特) | ✅ 新增 | 位深量化 + 采样率保持（机器人音色核心） |
 | **Audio Recording** (录音) | ✅ 已实现 | VoicePackRecorder（录音→变声→存包）+ WavWriter |
 | **Soundboard** (音板) | ✅ 已实现 | VoicePackPlayer 语音包外放 |
 | **Auto-Tune** (自动校音) | 🟡 引擎就绪 | autotune.c + nativeSetAutoTune 已实现，App 端无 UI 入口 |
-| **Chorus** (合唱) | ❌ 未实现 | 仅 module.h 预留 ID 6，无实现 |
-| **Bitcrushing** (降比特) | ❌ 未实现 | Lo-Fi 效果 |
-| **Vibrato** (颤音) | ❌ 未实现 | 周期性音高调制 |
-| **Voice Lock** (语音锁定) | ❌ 未实现 | 监听时实时听到处理效果 |
+| **Voice Lock** (语音锁定) | ❌ 不适用 | 非实时定位（录音后处理），实时监听不在当前范围 |
 
 ### Android 平台特有缺口
 | 功能 | 优先级 | 说明 |

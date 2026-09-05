@@ -159,8 +159,8 @@ class FloatingBallService : Service() {
             // 设置初始状态为 IDLE
             view.setState(FloatingBallView.BallState.IDLE)
 
-            // Task 9 + Task 10: 注入交互回调（手势 → 动作委托）
-            // 五个回调全部接线：展开/收起面板 + PTT 录音/停止 + 播放最近语音包
+            // 注入交互回调（手势 → 动作委托，交互 v2）
+            // 手势映射：单击=开/关面板（绿色态=播放最近包）+ 长按=PTT 录音/松手停止
             view.interactionCallback = object : BallInteractionCallback {
                 override fun onExpandPanel() {
                     AppLogger.i("FloatingBall", "手势：单击 → 展开面板")
@@ -183,12 +183,12 @@ class FloatingBallService : Service() {
                 }
 
                 override fun onPlayLatest() {
-                    AppLogger.i("FloatingBall", "手势：双击 → 播放最近语音包")
+                    AppLogger.i("FloatingBall", "手势：绿球单击 → 播放最近语音包")
                     playLatestInternal()
                 }
             }
 
-            // 拖动位置日志（保留，供调试）
+            // 拖动回调（位置日志，供调试）
             view.onDrag = { x, y ->
                 AppLogger.d("FloatingBall", "悬浮球拖动到 ($x, $y)")
             }
@@ -319,8 +319,10 @@ class FloatingBallService : Service() {
     }
 
     /**
-     * 播放最近一条语音包（双击球触发）。
+     * 播放最近一条语音包（绿色态单击球触发）。
      * 无语音包时 Toast 提示；播放完成后球恢复 IDLE。
+     * 播放开始即把球切回紫色（IDLE）：此后单击正常开面板（可停止播放），
+     * 也避免播放中再次单击触发重播。
      */
     private fun playLatestInternal() {
         val latest = VoicePackStore.getLatest(this)
@@ -329,6 +331,8 @@ class FloatingBallService : Service() {
             AppLogger.w("FloatingBall", "playLatestInternal: 无语音包")
             return
         }
+        // 播放开始 → 球回紫（IDLE），单击语义切回"开面板"
+        ballView?.setState(FloatingBallView.BallState.IDLE)
         val p = getPlayer()
         p.play(this, latest) {
             ballView?.setState(FloatingBallView.BallState.IDLE)

@@ -195,11 +195,11 @@ fun SettingsPage(
                 )
 
                 // 长按触发时长滑块（仅悬浮球开启时显示）
-                // 范围 500~5000ms，默认 3000ms，步进 100ms
+                // 范围 500~5000ms，默认 600ms（微信按住说话级响应），步进 100ms
                 if (floatingBallEnabled) {
                     Spacer(Modifier.height(MaidMicSpacing.s))
                     var holdDurationMs by remember {
-                        mutableIntStateOf(prefs.getInt("hold_duration_ms", 3000))
+                        mutableIntStateOf(prefs.getInt("hold_duration_ms", 600))
                     }
                     AnimatedSlider(
                         label = "长按触发时长",
@@ -214,7 +214,7 @@ fun SettingsPage(
                         valueFormatter = { "${it.toInt()} ms" }
                     )
                     Text(
-                        text = "长按 ${holdDurationMs}ms 触发录音（双击播放最近语音包）",
+                        text = "长按 ${holdDurationMs}ms 触发录音（绿色球单击播放，松手后再录 0.5s）",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -608,6 +608,22 @@ class FloatingPanel(
             windowManager.addView(view, params)
             isShowing = true
             AppLogger.i(TAG, "面板已展开: x=$panelX y=$panelY ball=($ballX,$ballY) size=$ballSize")
+
+            // 入场动画：淡入 + 缩放 + 朝球方向滑入（"从球里长出来"的观感）
+            // 面板在球上方 → 从下方 (+14dp) 滑入；在球下方 → 从上方 (-14dp) 滑入
+            val slideFrom = if (panelY > ballY) -dpToPx(14f) else dpToPx(14f)
+            view.translationY = slideFrom
+            view.alpha = 0f
+            view.scaleX = 0.92f
+            view.scaleY = 0.92f
+            view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(180L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.6f))
+                .start()
         } catch (e: Exception) {
             AppLogger.e(TAG, "展开面板失败", e)
             cleanup()

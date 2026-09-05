@@ -135,9 +135,15 @@ fun ChainSnapshot.toSummary(): String {
                 val r = m.params["comp_ratio"] ?: 0f
                 if (t != 0f || r != 0f) parts += "压缩"
             }
-            4 -> { // Pitch Shift
+            4 -> { // Pitch Shift（旧版模块，兼容旧语音包快照）
                 val v = m.params["pitch_semitones"] ?: 0f
                 if (v != 0f) parts += "变调${fmtSignedInt(v.toInt())}"
+            }
+            15 -> { // VoiceTransform v3（变声核心：变调 + 共振峰）
+                val p = m.params["pitch_semitones"] ?: 0f
+                val f = m.params["formant_shift"] ?: 0f
+                if (p != 0f) parts += "变调${fmtSigned(p)}"
+                if (f != 0f) parts += "共振峰${fmtSigned(f)}"
             }
             5 -> { // Reverb
                 val v = m.params["reverb_mix"] ?: 0f
@@ -155,7 +161,7 @@ fun ChainSnapshot.toSummary(): String {
                 val v = m.params["treble_db"] ?: 0f
                 if (v != 0f) parts += "高音${fmtSigned(v)}"
             }
-            13 -> { // Formant
+            13 -> { // Formant（旧版模块，兼容旧语音包快照）
                 val v = m.params["formant_shift"] ?: 0f
                 if (v != 0f) parts += "共振峰${fmtSigned(v)}"
             }
@@ -163,6 +169,10 @@ fun ChainSnapshot.toSummary(): String {
                 val d = m.params["echo_delay_ms"] ?: 0f
                 val dec = m.params["echo_decay"] ?: 0f
                 if (d != 0f || dec != 0f) parts += "回声${d.toInt()}ms"
+            }
+            20 -> { // Bitcrusher
+                val v = m.params["bitcrush_mix"] ?: 0f
+                if (v != 0f) parts += "降比特${"%.2f".format(v)}"
             }
         }
     }

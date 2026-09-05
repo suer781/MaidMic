@@ -1,12 +1,16 @@
 // maidmic-engine/src/dsp/reverb.c
-// Echio 引擎混响模块
-// Echio Engine Reverb Module
+// Echio 引擎混响模块 v2（Freeverb 式）
+// Echio Engine Reverb Module v2 (Schroeder-Moorer / Freeverb style)
 //
-// 简单延迟线混响：干湿混合 + 反馈。
-// 算法逻辑从原 process_audio_frame 的 Step 4 迁移而来，保持音质一致。
+// 旧版为单延迟线反馈（金属罐头声）。v2 改为经典 Freeverb 拓扑：
+//   8 个并联低阻尼组合器（comb，长度互质防梳状叠加）
+//   → 4 个串联全通滤波器（allpass，反馈 0.5）增加模态密度。
+// 立体声第二声道延迟整体 +23 样本展开声场。
+// 阻尼（高频吸收）与反馈（房间大小）为内部定值，针对人声调优。
 //
 // 参数：
-//   reverb_mix — 混响混合比 (0 ~ 1)
+//   reverb_mix   — 干湿混合比 (0 ~ 1)（与旧版同名，UI 零改动）
+//   reverb_decay — 尾音衰减系数 (0.1 ~ 0.95，默认 0.84，可选微调)
 
 #include "maidmic/module.h"
 #include <math.h>
@@ -14,27 +18,42 @@
 #include <string.h>
 
 // ============================================================
-// 辅助函数
+// 常量（Freeverb 调音表 @44.1kHz，setup 时按采样率缩放）
 // ============================================================
 
-static inline float clampf(float v, float min, float max) {
-    return v < min ? min : (v > max ? max : v);
-}
+#define RV_NUM_COMB 8
+#define RV_NUM_AP   4
+#define RV_STEREO_SPREAD 23   // 立体声第二声道附加延迟（样本）
+
+static const int rv_comb_tuning[RV_NUM_COMB] = {1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617};
+static const int rv_ap_tuning[RV_NUM_AP]     = {556, 441, 341, 225};
 
 // ============================================================
 // 模块实例数据
 // ============================================================
 
-#define REVERB_BUF_SIZE 48000  // 默认容量 1秒 @48kHz（单声道样本数）
+typedef struct {
+    float* buf;        // 延迟线
+    int size;          // 容量
+    int pos;           // 写指针
+    float filterstore; // 阻尼一阶低通状态
+} rv_comb_t;
 
 typedef struct {
-    float mix;            // 混响混合比 0~1（目标值）
-    float* buf;           // 延迟线（动态分配，按样本数计，容量 >= 声道相关需求）
-    int buf_size;         // 延迟线容量（样本数）
-    int pos;              // 延迟线写指针（全局样本索引，交错数据天然支持）
-    maidmic_ramp_t mix_ramp;  // 混合比平滑器（消除 zipper 噪声）
+    float* buf;
+    int size;
+    int pos;
+} rv_ap_t;
+
+typedef struct {
+    float mix;
+    float decay;               // 尾音衰减（目标值）
+    maidmic_ramp_t mix_ramp;
+    maidmic_ramp_t decay_ramp;
     uint32_t sample_rate;
     uint16_t channels;
+    rv_comb_t comb[2][RV_NUM_COMB];
+    rv_ap_t ap[2][RV_NUM_AP];
 } reverb_data_t;
 
 // ============================================================
@@ -50,8 +69,62 @@ static const maidmic_param_t reverb_params[] = {
         .max = 1.0f,
         .unit = "",
     },
+    {
+        .key = "reverb_decay",
+        .type = MAIDMIC_PARAM_FLOAT,
+        .value.as_float = 0.84f,
+        .min = 0.1f,
+        .max = 0.95f,
+        .unit = "",
+    },
     { .key = NULL },
 };
+
+// ============================================================
+// 状态管理
+// ============================================================
+
+static void rv_free_all(reverb_data_t* r) {
+    for (uint32_t c = 0; c < 2u; c++) {
+        for (int i = 0; i < RV_NUM_COMB; i++) {
+            free(r->comb[c][i].buf);
+            r->comb[c][i].buf = NULL;
+        }
+        for (int i = 0; i < RV_NUM_AP; i++) {
+            free(r->ap[c][i].buf);
+            r->ap[c][i].buf = NULL;
+        }
+    }
+}
+
+static void rv_init_buffers(reverb_data_t* r) {
+    // 调音表按 44.1kHz 标定；低于 44.1k 的采样率沿用原值（延迟偏长无碍）
+    const float scale = (float)r->sample_rate / 44100.0f;
+    const int spread = (int)RV_STEREO_SPREAD;
+
+    for (uint32_t c = 0; c < 2u; c++) {
+        const int offset = (c == 1u) ? spread : 0;
+        for (int i = 0; i < RV_NUM_COMB; i++) {
+            rv_comb_t* cb = &r->comb[c][i];
+            int sz = (int)((float)rv_comb_tuning[i] * scale) + offset;
+            if (sz < 2) sz = 2;
+            free(cb->buf);
+            cb->buf = (float*)calloc((size_t)sz, sizeof(float));
+            cb->size = cb->buf ? sz : 0;
+            cb->pos = 0;
+            cb->filterstore = 0.0f;
+        }
+        for (int i = 0; i < RV_NUM_AP; i++) {
+            rv_ap_t* ap = &r->ap[c][i];
+            int sz = (int)((float)rv_ap_tuning[i] * scale) + offset;
+            if (sz < 2) sz = 2;
+            free(ap->buf);
+            ap->buf = (float*)calloc((size_t)sz, sizeof(float));
+            ap->size = ap->buf ? sz : 0;
+            ap->pos = 0;
+        }
+    }
+}
 
 // ============================================================
 // vtable 实现
@@ -61,59 +134,65 @@ static void* reverb_create(void) {
     reverb_data_t* r = (reverb_data_t*)calloc(1, sizeof(reverb_data_t));
     if (!r) return NULL;
     r->mix = 0.0f;
-    r->pos = 0;
-    r->buf_size = REVERB_BUF_SIZE;
-    r->buf = (float*)calloc((size_t)REVERB_BUF_SIZE, sizeof(float));
-    if (!r->buf) {
-        free(r);
-        return NULL;
-    }
+    r->decay = 0.84f;
     maidmic_ramp_init(&r->mix_ramp, r->mix);
+    maidmic_ramp_init(&r->decay_ramp, r->decay);
     return r;
 }
 
 static void reverb_destroy(void* userdata) {
     reverb_data_t* r = (reverb_data_t*)userdata;
-    free(r->buf);
+    if (!r) return;
+    rv_free_all(r);
     free(r);
 }
 
 static bool reverb_setup(void* userdata, uint32_t sample_rate, uint16_t channels) {
     reverb_data_t* r = (reverb_data_t*)userdata;
+    if (sample_rate == 0 || channels == 0 || channels > 2) return false;
     r->sample_rate = sample_rate;
     r->channels = channels;
-    // 延迟线长度 = sample_rate/4 帧（250ms），按"样本"计需乘以声道数。
-    // 缓冲容量（=延迟线长度）必须 >= 该需求（例如 192kHz 双声道需 96000 样本）。
-    int need = (int)(sample_rate / 4) * (int)channels;
-    if (need < 1) need = 1;
-    if (need != r->buf_size) {
-        float* new_buf = (float*)realloc(r->buf, (size_t)need * sizeof(float));
-        if (!new_buf) return false;
-        r->buf = new_buf;
-        memset(r->buf, 0, (size_t)need * sizeof(float));  // 延迟线长度变化，整体清零
-        r->buf_size = need;
+    rv_free_all(r);
+    rv_init_buffers(r);
+    // 任一缓冲分配失败
+    for (uint32_t c = 0; c < 2u; c++) {
+        for (int i = 0; i < RV_NUM_COMB; i++) {
+            if (!r->comb[c][i].buf) return false;
+        }
+        for (int i = 0; i < RV_NUM_AP; i++) {
+            if (!r->ap[c][i].buf) return false;
+        }
     }
-    if (r->pos >= r->buf_size) r->pos = 0;
     return true;
 }
 
 static uint32_t reverb_get_param_count(void* userdata) {
     (void)userdata;
-    return 1;
+    return 2;
 }
 
 static const maidmic_param_t* reverb_get_param_info(void* userdata, uint32_t index) {
     (void)userdata;
-    if (index < 1) return &reverb_params[index];
+    if (index < 2) return &reverb_params[index];
     return NULL;
 }
 
 static bool reverb_set_param(void* userdata, const char* key, maidmic_param_t value) {
     reverb_data_t* r = (reverb_data_t*)userdata;
     if (strcmp(key, "reverb_mix") == 0 && value.type == MAIDMIC_PARAM_FLOAT) {
-        r->mix = clampf(value.value.as_float, 0.0f, 1.0f);
-        // 只更新目标值，process 中逐样本平滑逼近
-        maidmic_ramp_set_target(&r->mix_ramp, r->mix);
+        float m = value.value.as_float;
+        if (m < 0.0f) m = 0.0f;
+        if (m > 1.0f) m = 1.0f;
+        r->mix = m;
+        maidmic_ramp_set_target(&r->mix_ramp, m);
+        return true;
+    }
+    if (strcmp(key, "reverb_decay") == 0 && (value.type == MAIDMIC_PARAM_FLOAT || value.type == MAIDMIC_PARAM_INT)) {
+        float d = (value.type == MAIDMIC_PARAM_FLOAT) ? value.value.as_float : (float)value.value.as_int;
+        if (d < 0.1f) d = 0.1f;
+        if (d > 0.95f) d = 0.95f;
+        r->decay = d;
+        maidmic_ramp_set_target(&r->decay_ramp, d);
         return true;
     }
     return false;
@@ -129,23 +208,57 @@ static maidmic_param_t reverb_get_param(void* userdata, const char* key) {
         param.min = 0.0f;
         param.max = 1.0f;
         param.unit = "";
+    } else if (strcmp(key, "reverb_decay") == 0) {
+        param.key = "reverb_decay";
+        param.type = MAIDMIC_PARAM_FLOAT;
+        param.value.as_float = r->decay;
+        param.min = 0.1f;
+        param.max = 0.95f;
+        param.unit = "";
     }
     return param;
 }
 
 // ============================================================
-// 核心：音频处理
+// 核心：单声道采样处理
 // ============================================================
-// 延迟线长度 = sample_rate / 4 (250ms)
-// 读延迟线 → 湿信号 * 0.6
-// 写延迟线 = 干信号 * 0.4 + 湿信号 * 0.6 (反馈)
-// 输出 = 干信号 * (1-mix) + 湿信号 * mix
+
+// 组合器（并联，带阻尼低通）：经典 Freeverb comb
+static inline float rv_comb_process(rv_comb_t* cb, float in, float feedback, float damp1) {
+    const float out = cb->buf[cb->pos];
+    cb->filterstore = out * (1.0f - damp1) + cb->filterstore * damp1;
+    cb->buf[cb->pos] = in + cb->filterstore * feedback;
+    if (++cb->pos >= cb->size) cb->pos = 0;
+    return out;
+}
+
+// 全通（串联）：Freeverb allpass
+static inline float rv_ap_process(rv_ap_t* ap, float in) {
+    const float bufout = ap->buf[ap->pos];
+    const float out = -in + bufout;
+    ap->buf[ap->pos] = in + bufout * 0.5f;
+    if (++ap->pos >= ap->size) ap->pos = 0;
+    return out;
+}
+
+// 单声道单样本混响：返回湿信号
+static inline float rv_reverb_sample(reverb_data_t* r, uint32_t ch, float in,
+                                     float feedback, float damp1) {
+    float out = 0.0f;
+    for (int i = 0; i < RV_NUM_COMB; i++) {
+        out += rv_comb_process(&r->comb[ch][i], in, feedback, damp1);
+    }
+    for (int i = 0; i < RV_NUM_AP; i++) {
+        out = rv_ap_process(&r->ap[ch][i], out);
+    }
+    return out;
+}
 
 static bool reverb_process(void* userdata, const maidmic_buffer_t* input, maidmic_buffer_t* output) {
     reverb_data_t* r = (reverb_data_t*)userdata;
 
     // 平滑到位且混合比极低：直通
-    if (r->mix_ramp.current <= 0.01f && r->mix_ramp.target <= 0.01f) {
+    if (r->mix_ramp.current <= 0.003f && r->mix_ramp.target <= 0.003f) {
         if (output->data != input->data) {
             memcpy(output->data, input->data, input->data_bytes);
         }
@@ -153,10 +266,8 @@ static bool reverb_process(void* userdata, const maidmic_buffer_t* input, maidmi
         return true;
     }
 
-    // 多声道：按全局样本索引读写延迟线（交错数据天然支持），延迟长度按样本计
-    uint32_t sample_count = input->meta.frame_count * input->meta.channels;
-    int buf_size = r->buf_size;
-    if (buf_size <= 0) buf_size = REVERB_BUF_SIZE;
+    const uint32_t sample_count = input->meta.frame_count * input->meta.channels;
+    const uint16_t chs = input->meta.channels;
 
     if (input->meta.format == MAIDMIC_SAMPLE_F32) {
         if (output->data != input->data) {
@@ -164,15 +275,14 @@ static bool reverb_process(void* userdata, const maidmic_buffer_t* input, maidmi
         }
         float* buffer = (float*)output->data;
         for (uint32_t i = 0; i < sample_count; i++) {
-            // 每样本平滑推进混合比，消除 zipper 噪声
-            float mix = maidmic_ramp_next(&r->mix_ramp);
-            // 从延迟线读取（环形：读当前位置的最旧值）
-            float wet = r->buf[r->pos] * 0.6f;
-            // 写入延迟线（输入 + 反馈）
-            r->buf[r->pos] = buffer[i] * 0.4f + wet * 0.6f;
-            // 混合干湿
-            buffer[i] = buffer[i] * (1.0f - mix) + wet * mix;
-            if (++r->pos >= buf_size) r->pos = 0;
+            const float mix = maidmic_ramp_next(&r->mix_ramp);
+            const float feedback = maidmic_ramp_next(&r->decay_ramp);
+            const float damp1 = 0.20f;  // 高频阻尼（针对人声调优）
+            const uint32_t ch = (chs == 2u) ? (i & 1u) : 0u;
+            const float dry = buffer[i];
+            // 湿信号固定增益 0.28：8 组合器并联能量 ≈ √8×单路，补偿到接近干声
+            const float wet = rv_reverb_sample(r, ch, dry, feedback, damp1) * 0.28f;
+            buffer[i] = dry * (1.0f - mix) + wet * mix;
         }
     } else if (input->meta.format == MAIDMIC_SAMPLE_S16) {
         if (output->data != input->data) {
@@ -180,13 +290,16 @@ static bool reverb_process(void* userdata, const maidmic_buffer_t* input, maidmi
         }
         int16_t* buffer = (int16_t*)output->data;
         for (uint32_t i = 0; i < sample_count; i++) {
-            float mix = maidmic_ramp_next(&r->mix_ramp);
-            float wet = r->buf[r->pos] * 0.6f;
-            r->buf[r->pos] = (float)buffer[i] * 0.4f + wet * 0.6f;
-            buffer[i] = (int16_t)clampf(
-                (float)buffer[i] * (1.0f - mix) + wet * mix,
-                -32768.0f, 32767.0f);
-            if (++r->pos >= buf_size) r->pos = 0;
+            const float mix = maidmic_ramp_next(&r->mix_ramp);
+            const float feedback = maidmic_ramp_next(&r->decay_ramp);
+            const float damp1 = 0.20f;
+            const uint32_t ch = (chs == 2u) ? (i & 1u) : 0u;
+            const float dry = (float)buffer[i] / 32768.0f;
+            const float wet = rv_reverb_sample(r, ch, dry, feedback, damp1) * 0.28f;
+            float v = dry * (1.0f - mix) + wet * mix;
+            if (v > 1.0f) v = 1.0f;
+            if (v < -1.0f) v = -1.0f;
+            buffer[i] = (int16_t)(v * 32767.0f);
         }
     }
 
@@ -196,9 +309,23 @@ static bool reverb_process(void* userdata, const maidmic_buffer_t* input, maidmi
 
 static void reverb_reset(void* userdata) {
     reverb_data_t* r = (reverb_data_t*)userdata;
-    if (r->buf) memset(r->buf, 0, (size_t)r->buf_size * sizeof(float));
-    r->pos = 0;
+    for (uint32_t c = 0; c < 2u; c++) {
+        for (int i = 0; i < RV_NUM_COMB; i++) {
+            if (r->comb[c][i].buf) {
+                memset(r->comb[c][i].buf, 0, (size_t)r->comb[c][i].size * sizeof(float));
+            }
+            r->comb[c][i].pos = 0;
+            r->comb[c][i].filterstore = 0.0f;
+        }
+        for (int i = 0; i < RV_NUM_AP; i++) {
+            if (r->ap[c][i].buf) {
+                memset(r->ap[c][i].buf, 0, (size_t)r->ap[c][i].size * sizeof(float));
+            }
+            r->ap[c][i].pos = 0;
+        }
+    }
     maidmic_ramp_reset(&r->mix_ramp);
+    maidmic_ramp_reset(&r->decay_ramp);
 }
 
 // ============================================================
@@ -220,9 +347,9 @@ static const maidmic_module_vtable_t reverb_vtable = {
 const maidmic_module_t maidmic_module_reverb = {
     .id = MAIDMIC_MODULE_ID_REVERB,
     .name = "Reverb",
-    .description = "Simple delay-line reverb (混响)",
+    .description = "Freeverb-style reverb (8 comb + 4 allpass, 人声混响 v2)",
     .author = "MaidMic Team",
-    .version = 1,
-    .capabilities = MAIDMIC_CAP_PROCESS_AUDIO | MAIDMIC_CAP_HAS_PARAMS | MAIDMIC_CAP_BYPASS | MAIDMIC_CAP_REALTIME,
+    .version = 2,
+    .capabilities = MAIDMIC_CAP_PROCESS_AUDIO | MAIDMIC_CAP_HAS_PARAMS | MAIDMIC_CAP_BYPASS | MAIDMIC_CAP_STEREO | MAIDMIC_CAP_REALTIME,
     .vtable = &reverb_vtable,
 };

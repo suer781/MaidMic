@@ -11,14 +11,19 @@
 package aoeck.dwyai.com.floating
 
 /**
- * 悬浮球交互回调。
+ * 悬浮球交互回调（交互 v2）。
  *
  * 手势 → 回调映射：
- *   - 单击        → [onExpandPanel] / [onCollapsePanel]（面板展开/收起切换）
- *   - 双击        → [onPlayLatest]（仅绿色态有效，播放最近语音包）
- *   - 长按        → [onStartRecording]（overwrite=false，新增语音包）
- *   - 绿色态长按  → [onStartRecording]（overwrite=true，覆盖最近语音包）
- *   - 长按松手    → [onStopRecording]（delayMs=500，松手后延迟 0.5s 停止）
+ *   - 单击（立即响应，无延迟）
+ *       * 紫色态（IDLE）    → [onExpandPanel] / [onCollapsePanel]（面板切换）
+ *       * 绿色态（有新包）  → [onPlayLatest]（播放最近语音包，贴合状态语义）
+ *   - 长按（默认 600ms，按住有进度弧反馈）
+ *       * 紫色态           → [onStartRecording]（overwrite=false，新增语音包）
+ *       * 绿色态           → [onStartRecording]（overwrite=true，覆盖重录）
+ *   - 长按松手             → [onStopRecording]（delayMs=500，松手后继续录 0.5s）
+ *   - 拖动                → 移动位置（不经回调，View 内部处理；松手吸附边缘）
+ *
+ * 双击手势已移除：它是单击 300ms 延迟的根源，播放由绿色态单击承接。
  */
 interface BallInteractionCallback {
 
