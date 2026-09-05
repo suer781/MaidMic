@@ -29,14 +29,18 @@ MaidMic 是一个开源的 Android 变声录音工具，搭载自研 **Echio 变
 - **合唱** — 三路调制延迟（相位 0°/120°/240°）
 - **降比特** — 位深量化 + 采样率保持（Lo-Fi / 机器人）
 
-### 🔌 效果插件系统（Lua）
-- 用 **Lua 脚本**编写参数型效果插件：`maidmic.set_param("pitch_semitones", 7)`
-  一行即挂接引擎，激活/停用即时生效、自动恢复参数
-- 内置三个示例插件：**电话音 / 花栗鼠 / 低沉大叔**（首次启动自动释放，可改可学）
-- 沙箱安全：`io/os/debug/require` 全移除，只能读写引擎 DSP 参数白名单，
-  预设文件路径穿越校验
-- 插件目录：`Android/data/aoeck.dwyai.com/files/maidmic_plugins/`，
-  放入 `.lua` 后设置页「重新扫描」即装
+### 🔌 插件系统（三层架构，万物皆插件）
+- **Tier 1 参数插件**（Lua 沙箱）：`maidmic.set_param("pitch_semitones", 7)`
+  组合引擎参数；内置电话音 / 花栗鼠 / 低沉大叔示例
+- **Tier 2 DSP 插件**（dex，UGC 门控）：实现 `DspAudioPlugin` 接口的
+  **自定义实时音频处理**，DexClassLoader 加载挂入实时链
+  （示例工程 `examples/dsp-plugin/` 一键构建插件 apk）
+- **Tier 3 模型插件**（dex，UGC 门控）：实现 `ModelVoicePlugin` 接口的
+  **自定义模型离线转换**——RVC 等推理模型实现同一接口即可接入，
+  宿主只认 PCM 进出；内置 STFT 谱包络变换参考模型
+- 设置页 → 插件：分组列表、一键激活、应用到语音包
+- 沙箱与权限分级：Lua 全沙箱；dex 插件为 NATIVE 级（任意代码执行），
+  需开发者设置开启 UGC 后加载
 - 开发指南见 [PLUGIN_API.md](PLUGIN_API.md)
 
 ### 🎯 变声预设

@@ -127,6 +127,43 @@ JNI 三个桥（get/set_param、load_preset）是空壳、设置页入口被注�
 
 ---
 
+## 🌌 三层通用插件架构（2026-09-06，"万物皆插件"）
+
+在参数型插件之上，把插件体系扩展为**三层能力模型**——自定义 DSP 与
+自定义模型（RVC 类）都可以作为插件装载：
+
+| 层级 | 形式 | 能力 | 状态 |
+|------|------|------|------|
+| Tier 1 PARAM | Lua 沙箱 | 参数型效果 | ✅（上一轮） |
+| Tier 2 DSP | dex/apk（UGC 门控） | 自定义实时音频处理，挂入实时链 | ✅ 本轮 |
+| Tier 3 MODEL | dex/apk（UGC 门控） | 自定义模型离线转换（RVC 接入面） | ✅ 本轮 |
+
+- **统一契约**（`plugins/core/MaidMicPluginApi.kt`）：
+  `DspAudioPlugin`（init/process 逐块浮点域原地处理/release）、
+  `ModelVoicePlugin`（loadModel/convert 整段 PCM 进出/release）。
+  宿主只认接口与 PCM，不感知插件内部——RVC/ONNX/ncnn/统计模型
+  实现同一接口即可替换。
+- **加载器**（`DexPluginLoader`）：DexClassLoader 加载 dex/apk 包
+  （classes.dex + plugin.json 清单），扫描 `maidmic_plugins_ext/`，
+  probe 无副作用探测插件类型
+- **实时链集成**：`DspPluginChain` 原子快照无锁挂入
+  `NativeAudioProcessor.processAudio`（引擎后串行），坏插件异常自动停用
+- **离线模型流程**：`ModelRunner` 读语音包（新 WavReader）→ convert →
+  写新 WAV → 存为新语音包（不覆盖原包）
+- **内置参考模型**：`SpectralMorphModel`（STFT 谱包络搬移，纯 Kotlin
+  FFT，无依赖）——真 RVC 插件用 ONNX Runtime 实现同一接口替换
+- **UGC 权限门**：dex 插件为任意代码执行（NATIVE 级），仅在开发者
+  设置 → UGC 插件开启后扫描加载
+- **示例工程**：`examples/dsp-plugin/`（环形调制机器人插件），
+  `./gradlew assembleRelease` 自动产出可直接安装的插件 apk
+- **文档**：PLUGIN_API.md 扩展为三层架构指南（含 RVC 插件实现要点）
+
+设计边界（如实说明）：本轮交付的是**架构与参考实现**——实时 RVC 的
+完整推理需要 ONNX Runtime 依赖与数百 MB 模型文件，无法凭空内置；
+但模型插件接口即 RVC 接入面，社区可按 PLUGIN_API.md 自行打包。
+
+---
+
 ## 瓶颈：实时变声拦截需要 Root（未变）
 
 **这仍是整个项目最大的平台级卡点**（与 DSP 质量无关）：

@@ -1,11 +1,27 @@
-# MaidMic 效果插件开发指南（Lua）
+# MaidMic 插件开发指南
+
+MaidMic 采用**三层插件架构**（万物皆插件）：
+
+| 层级 | 形式 | 能力 | 典型用途 |
+|------|------|------|----------|
+| **Tier 1 · PARAM** | Lua 脚本（沙箱） | 组合引擎参数 | 电话音、花栗鼠等效果预设 |
+| **Tier 2 · DSP** | dex/apk（UGC 门控） | **自定义实时音频处理**，逐块 Float 域 | 环形调制、自定义滤波、第三方算法 |
+| **Tier 3 · MODEL** | dex/apk（UGC 门控） | **自定义模型推理**，离线整段转换 | RVC / so-vits / 统计模型变声 |
+
+宿主只认统一契约（PCM 进出、能力接口），不感知插件内部实现——
+Tier 2 可以是任何算法，Tier 3 可以是任何推理后端（ONNX Runtime、
+ncnn、自研统计模型），引擎与模型完全解耦。
+
+---
+
+# Tier 1 · 参数插件（Lua）
 
 MaidMic 支持用 **Lua 脚本**编写参数型效果插件：脚本通过引擎 API 组合
 变调、共振峰、EQ、混响、失真等参数，实现自定义音色（电话音、花栗鼠、
 低沉大叔……），激活/停用即时生效、可自动恢复。
 
 > 模型说明：插件为**参数型**（不做逐样本音频处理）。LuaJ 解释器对
-> 48kHz 逐样本循环的性能不可行，参数型是性能、安全与表达力的平衡点。
+> 48kHz 逐样本循环的性能不可行，需要音频级处理请写 Tier 2 DSP 插件。
 
 ---
 
@@ -91,7 +107,7 @@ end
 
 ---
 
-## 安全模型
+## 安全模型（Tier 1）
 
 - 脚本运行在沙箱中：`io` / `os` / `debug` / `require` / `dofile` / `loadfile`
   全部被移除，无法访问文件系统、网络或执行命令。
@@ -104,7 +120,106 @@ end
 
 ---
 
-## 预设数据（可选）
+# Tier 2 · DSP 插件（自定义实时音频处理）
+
+实现 `DspAudioPlugin` 接口，打包为 dex/apk，即可被宿主以 DexClassLoader
+加载并挂入**实时处理链**（引擎管线之后串行，逐块 Float 域原地处理）。
+
+## 接口
+
+```kotlin
+interface DspAudioPlugin {
+    val pluginId: String
+    val pluginName: String
+    val pluginAuthor: String
+    val pluginDescription: String
+
+    fun init(sampleRate: Int, channels: Int)          // 流开始时调用
+    fun process(samples: FloatArray, frames: Int, channels: Int)  // 逐块原地处理
+    fun release()                                      // 停用时释放
+}
+```
+
+## 打包格式
+
+`.apk`（或 .zip/.jar）内含：
+
+```
+classes.dex     实现 DspAudioPlugin 的类
+plugin.json     清单：{ "id", "entry": "实现类全名", "name", "author", "description" }
+```
+
+放置目录：`Android/data/aoeck.dwyai.com/files/maidmic_plugins_ext/`
+→ 设置 → 插件 → 扩展插件 → 打开开关即挂入实时链。
+
+## 示例工程
+
+仓库 `examples/dsp-plugin/` 是一个完整的环形调制机器人插件：
+- `src/.../RingModPlugin.kt` 实现参考（30 行核心处理）
+- `build.gradle.kts` 含自动打包任务：`./gradlew assembleRelease`
+  → `build/outputs/plugin_ringmod.apk` 直接可用
+- 注意：`DspAudioPlugin.kt` 为接口副本（与宿主保持一致），构建期
+  compileOnly，运行时由宿主加载
+
+## 性能与安全
+
+- `process()` 在**音频线程**逐块调用（48kHz 下每秒约 47~187 块），
+  必须无阻塞、无堆分配、单块耗时 < 1ms；抛异常的插件会被自动停用。
+- dex 插件是**任意代码执行**（拥有 App 全部权限），仅在
+  「开发者设置 → UGC 插件」开启后加载，来源需可信。
+
+---
+
+# Tier 3 · 模型插件（自定义模型，RVC 接入面）
+
+实现 `ModelVoicePlugin` 接口，即可把任何**离线整段转换**的变声模型
+接入宿主——包括真正的 RVC（HuBERT 内容特征 + F0 + 声码器）、
+so-vits-svc、GMM 统计模型等。宿主只认 PCM 进出，不感知推理后端。
+
+## 接口
+
+```kotlin
+interface ModelVoicePlugin {
+    val pluginId: String
+    val pluginName: String
+    val pluginAuthor: String
+    val pluginDescription: String
+
+    fun loadModel(modelFile: File?): Boolean   // 加载模型文件（.onnx/.bin 由插件解释）
+    fun convert(input: ShortArray, sampleRate: Int): ShortArray  // 整段转换
+    fun release()
+}
+```
+
+## 运行方式
+
+- **离线转换**：设置 → 插件 → 模型插件 → 点按应用到最近语音包，
+  生成新语音包（不覆盖原包）；推理在后台线程，可耗时数秒。
+- **内置参考实现**：`SpectralMorphModel`（STFT 谱包络搬移，纯 Kotlin、
+  无依赖），演示完整模型插件形态；RVC 插件用同一接口替换其内部为
+  ONNX Runtime 推理即可。
+- 打包/放置方式与 Tier 2 相同（`maidmic_plugins_ext/` + plugin.json）。
+
+## RVC 插件实现要点（路线图）
+
+1. 依赖 `com.microsoft.onnxruntime:onnxruntime-android`（或 ncnn）
+2. `loadModel` 下载/解压模型（内容编码器 + F0 模型 + 声码器）
+3. `convert` 内：重采样 → 内容特征 → F0（RMVPE/CREPE）→ 检索/映射 →
+   声码器 → 返回 PCM
+4. 建议首次运行时把模型下载到 `files/models/` 并缓存；宿主提供
+   `load_preset` 式的目录约定（`maidmic_plugins_ext/<id>/models/`）
+
+---
+
+## 安全模型（Tier 2/3）
+
+- dex/apk 插件是**任意代码执行**（拥有 App 全部权限）——对应权限分级
+  中的 NATIVE 级，仅在「开发者设置 → UGC 插件」显式开启后加载。
+- 请只安装来源可信的插件包；企业分发可另行引入签名校验。
+
+---
+
+## 预设数据（可选，Tier 1）
 
 插件可在目录下放置预设数据供脚本运行时读取：
 

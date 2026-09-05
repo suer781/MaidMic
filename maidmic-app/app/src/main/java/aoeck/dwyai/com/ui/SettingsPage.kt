@@ -506,13 +506,18 @@ private fun LinkRow(label: String, url: String, context: Context) {
 }
 
 // ============================================================
-// 插件区块（Lua 效果插件 + 模块链编辑器入口）
+// 插件区块（三层插件架构）
+//   Tier 1 参数插件（Lua 沙箱）/ Tier 2 DSP 插件（dex，UGC）/
+//   Tier 3 模型插件（dex，UGC）+ 内置参考模型 + 模块链编辑器入口
 // ============================================================
 
 @Composable
 private fun PluginSection(onOpenEditor: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val pm = remember { aoeck.dwyai.com.plugins.lua.PluginManager.get(context) }
+    val ugcEnabled = remember {
+        mutableStateOf(aoeck.dwyai.com.plugins.core.PluginSecurity.isUgcEnabled(context))
+    }
 
     // 首次进入刷新插件列表
     LaunchedEffect(Unit) { pm.refresh() }
@@ -522,13 +527,45 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
     val states by pm.states
     val error by pm.lastError
 
+    // Tier 2/3：dex 插件扫描（UGC 开启时才有意义）
+    var dspPackages by remember { mutableStateOf<List<aoeck.dwyai.com.plugins.core.ExtPluginPackage>>(emptyList()) }
+    var modelPackages by remember { mutableStateOf<List<aoeck.dwyai.com.plugins.core.ExtPluginPackage>>(emptyList()) }
+    var dspEnabledIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var rescanTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(rescanTick) {
+        if (ugcEnabled.value) {
+            val all = aoeck.dwyai.com.plugins.core.DexPluginLoader.scan(context)
+            dspPackages = all.filter { pkg ->
+                aoeck.dwyai.com.plugins.core.DexPluginLoader.probe(context, pkg).first
+            }
+            modelPackages = all.filter { pkg ->
+                aoeck.dwyai.com.plugins.core.DexPluginLoader.probe(context, pkg).second
+            }
+            dspEnabledIds = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
+                .getStringSet("dsp_plugin_active", emptySet()) ?: emptySet()
+        }
+    }
+
+    // 内置参考模型（Tier 3 无依赖实现）
+    val builtInModel = remember { aoeck.dwyai.com.plugins.model.SpectralMorphModel() }
+    var modelBusy by remember { mutableStateOf(false) }
+    var modelMsg by remember { mutableStateOf<String?>(null) }
+
     GradientCard(modifier = Modifier.fillMaxWidth()) {
         SectionHeader(title = "插件")
         Spacer(Modifier.height(MaidMicSpacing.xs))
 
+        // ---------- Tier 1：参数插件（Lua） ----------
+        Text(
+            "参数插件（Lua）",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.height(MaidMicSpacing.xs))
+
         if (pluginList.isEmpty()) {
             Text(
-                "暂无插件。将 .lua 脚本放入\nAndroid/data/aoeck.dwyai.com/files/maidmic_plugins/\n后点「重新扫描」",
+                "暂无参数插件。将 .lua 脚本放入\nAndroid/data/aoeck.dwyai.com/files/maidmic_plugins/\n后点「重新扫描」",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -583,6 +620,7 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
                 .clickable {
                     HapticHelper.basic()
                     pm.refresh()
+                    rescanTick++
                 }
                 .padding(vertical = MaidMicSpacing.xs),
             verticalAlignment = Alignment.CenterVertically
@@ -593,6 +631,145 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
                 color = MaterialTheme.colorScheme.primary
             )
         }
+
+        Spacer(Modifier.height(MaidMicSpacing.s))
+
+        // ---------- Tier 2/3：dex 插件（UGC 门控） ----------
+        Text(
+            "扩展插件（DSP / 模型）",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.height(MaidMicSpacing.xs))
+
+        if (!ugcEnabled.value) {
+            Text(
+                "扩展插件可装载自定义 DSP 处理与 AI 变声模型（dex/apk 包）。\n" +
+                    "属于任意代码执行，需在「开发者设置 → UGC 插件」开启后使用。",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            // Tier 2：DSP 插件
+            Text(
+                "DSP 插件（实时，引擎后串行）",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (dspPackages.isEmpty()) {
+                Text(
+                    "无 DSP 插件包。将实现 DspAudioPlugin 的 apk 放入\nAndroid/data/aoeck.dwyai.com/files/maidmic_plugins_ext/",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                dspPackages.forEach { pkg ->
+                    SwitchRow(
+                        label = pkg.name,
+                        checked = pkg.id in dspEnabledIds,
+                        onCheckedChange = { wantOn ->
+                            HapticHelper.basic()
+                            if (wantOn) {
+                                aoeck.dwyai.com.plugins.core.DspPluginChain.enable(
+                                    context, pkg, sampleRate = 48000, channels = 1
+                                ) { ok, msg ->
+                                    if (!ok) modelMsg = "DSP 插件启用失败: $msg"
+                                }
+                            } else {
+                                aoeck.dwyai.com.plugins.core.DspPluginChain.disable(context, pkg.id)
+                            }
+                            dspEnabledIds = if (wantOn) dspEnabledIds + pkg.id
+                            else dspEnabledIds - pkg.id
+                        },
+                        subtitle = pkg.description.ifEmpty { pkg.author },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(MaidMicSpacing.s))
+
+            // Tier 3：模型插件
+            Text(
+                "模型插件（离线整段转换）",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // 内置参考模型
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = !modelBusy) {
+                        HapticHelper.basic()
+                        val latest = aoeck.dwyai.com.voicepack.VoicePackStore.getLatest(context)
+                        if (latest == null) {
+                            modelMsg = "暂无语音包，先录一段再应用模型"
+                        } else {
+                            modelBusy = true
+                            modelMsg = "转换中…"
+                            builtInModel.loadModel(null)
+                            aoeck.dwyai.com.plugins.model.ModelRunner.applyToPack(
+                                context, builtInModel, latest
+                            ) { pack, msg ->
+                                modelBusy = false
+                                modelMsg = if (pack != null) "已生成新语音包：${pack.name}" else "失败: $msg"
+                            }
+                        }
+                    }
+                    .padding(vertical = MaidMicSpacing.xs),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        builtInModel.pluginName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "点按应用到最近语音包（生成新包，不覆盖原包）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (modelBusy) {
+                    Text("…", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+
+            // 外部模型插件（dex）
+            if (modelPackages.isEmpty()) {
+                Text(
+                    "无外部模型插件。实现 ModelVoicePlugin 的 apk（如 RVC 推理包）" +
+                        "放入 maidmic_plugins_ext/ 即可被加载",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                modelPackages.forEach { pkg ->
+                    Text(
+                        pkg.name + " · " + pkg.author,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        pkg.description,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        modelMsg?.let { msg ->
+            Spacer(Modifier.height(MaidMicSpacing.xs))
+            Text(
+                msg,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(Modifier.height(MaidMicSpacing.s))
 
         // 模块链编辑器入口（与插件系统配套：插件写参数，编辑器改链路）
         Row(
@@ -621,8 +798,8 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
 
         Spacer(Modifier.height(MaidMicSpacing.xs))
         Text(
-            "插件为参数型效果脚本（Lua）：激活即改写引擎参数，停用自动恢复。" +
-                "录音/试听时效果实时生效。",
+            "三层插件架构：参数插件（Lua 沙箱）→ DSP 插件（实时链内，dex）→ " +
+                "模型插件（离线整段转换，dex；RVC 等推理模型实现同一接口即可接入）。",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

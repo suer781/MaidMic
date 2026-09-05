@@ -267,6 +267,25 @@ object NativeAudioProcessor {
                 System.arraycopy(input, 0, output, 0, size)
             }
         }
+
+        // Tier 2: DSP 插件链（引擎之后串行，浮点域原地处理）
+        // 链为空时零开销（原子快照判空）
+        if (aoeck.dwyai.com.plugins.core.DspPluginChain.snapshot().isNotEmpty()) {
+            val sampleCount = size / 2
+            val floatBuf = FloatArray(sampleCount)
+            for (i in 0 until sampleCount) {
+                floatBuf[i] = ((output[i * 2].toInt() and 0xFF) or
+                        ((output[i * 2 + 1].toInt() and 0xFF) shl 8)).toShort() / 32768.0f
+            }
+            aoeck.dwyai.com.plugins.core.DspPluginChain.processThrough(floatBuf, sampleCount, 1)
+            for (i in 0 until sampleCount) {
+                var v = floatBuf[i] * 32767.0f
+                if (v > 32767.0f) v = 32767.0f
+                if (v < -32768.0f) v = -32768.0f
+                output[i * 2] = v.toInt().toByte()
+                output[i * 2 + 1] = (v.toInt() shr 8).toByte()
+            }
+        }
     }
 
     /** Kotlin 纯软件降级处理（仅增益 + 样本拷贝） */
