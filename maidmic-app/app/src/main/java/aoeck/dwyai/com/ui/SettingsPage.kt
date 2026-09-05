@@ -48,6 +48,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,8 +79,7 @@ fun SettingsPage(
     enableLraRhythm: Boolean = false,
     onLraRhythmToggle: (Boolean) -> Unit = {},
     // === 子页面入口回调（由 MainActivity 置对应 flag） ===
-    // 注：模块链编辑器入口已暂时隐藏（与 UGC 插件配套，UGC 未实现），
-    //     恢复时在此重新添加 onOpenEditor 回调。
+    onOpenEditor: () -> Unit = {},
     onOpenDeveloperSettings: () -> Unit = {}
 ) {
     // maidmic_prefs：应用级开关与引擎选择
@@ -391,10 +391,14 @@ fun SettingsPage(
         }
 
         // ============================================================
-        // 4. 模块链编辑器组（暂时隐藏）
-        //   - 模块链编辑器与 UGC 模块插件配套使用，UGC 尚未实现，入口暂隐藏；
-        //     待 UGC 插件功能落地后与开发者设置页的 UGC 开关一同恢复。
+        // 4. 插件组（Lua 效果插件 + 模块链编辑器）
+        //   - 插件：assets 内置 + 用户插件目录扫描，一键激活/停用
+        //   - 模块链编辑器：对默认管线做模块增删/排序/旁路（UGC 插件系统落地，
+        //     恢复原隐藏入口）
         // ============================================================
+        item {
+            PluginSection(onOpenEditor = onOpenEditor)
+        }
 
         // ============================================================
         // 5. 关于组
@@ -499,4 +503,128 @@ private fun LinkRow(label: String, url: String, context: Context) {
             }
             .padding(vertical = MaidMicSpacing.xs)
     )
+}
+
+// ============================================================
+// 插件区块（Lua 效果插件 + 模块链编辑器入口）
+// ============================================================
+
+@Composable
+private fun PluginSection(onOpenEditor: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val pm = remember { aoeck.dwyai.com.plugins.lua.PluginManager.get(context) }
+
+    // 首次进入刷新插件列表
+    LaunchedEffect(Unit) { pm.refresh() }
+
+    val pluginList by pm.plugins
+    val activeId by pm.activePluginId
+    val states by pm.states
+    val error by pm.lastError
+
+    GradientCard(modifier = Modifier.fillMaxWidth()) {
+        SectionHeader(title = "插件")
+        Spacer(Modifier.height(MaidMicSpacing.xs))
+
+        if (pluginList.isEmpty()) {
+            Text(
+                "暂无插件。将 .lua 脚本放入\nAndroid/data/aoeck.dwyai.com/files/maidmic_plugins/\n后点「重新扫描」",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            pluginList.forEach { plugin ->
+                val state = states[plugin.id]
+                    ?: aoeck.dwyai.com.plugins.lua.PluginManager.PluginState.IDLE
+                val isActive = activeId == plugin.id
+                SwitchRow(
+                    label = plugin.name + "  v" + plugin.version,
+                    checked = isActive,
+                    onCheckedChange = { wantOn ->
+                        HapticHelper.basic()
+                        if (wantOn) {
+                            pm.activate(plugin.id)
+                        } else {
+                            pm.deactivate()
+                        }
+                        pm.saveActiveState()
+                    },
+                    subtitle = buildString {
+                        append(plugin.description.ifEmpty { "效果插件" })
+                        append(" · ")
+                        append(plugin.author)
+                        when (state) {
+                            aoeck.dwyai.com.plugins.lua.PluginManager.PluginState.ACTIVATING ->
+                                append(" · 激活中…")
+                            aoeck.dwyai.com.plugins.lua.PluginManager.PluginState.ERROR ->
+                                append(" · 出错")
+                            else -> {}
+                        }
+                    },
+                )
+            }
+        }
+
+        error?.let { err ->
+            Spacer(Modifier.height(MaidMicSpacing.xs))
+            Text(
+                err,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        Spacer(Modifier.height(MaidMicSpacing.s))
+
+        // 重新扫描
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    HapticHelper.basic()
+                    pm.refresh()
+                }
+                .padding(vertical = MaidMicSpacing.xs),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "重新扫描插件",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        // 模块链编辑器入口（与插件系统配套：插件写参数，编辑器改链路）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    HapticHelper.basic()
+                    onOpenEditor()
+                }
+                .padding(vertical = MaidMicSpacing.xs),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "模块链编辑器",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "调整 DSP 模块的增删、顺序与旁路",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Spacer(Modifier.height(MaidMicSpacing.xs))
+        Text(
+            "插件为参数型效果脚本（Lua）：激活即改写引擎参数，停用自动恢复。" +
+                "录音/试听时效果实时生效。",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }

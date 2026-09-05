@@ -100,6 +100,33 @@ FloatingPanel（入场动画）、SettingsPage（默认时长/文案）、BallIn
 
 ---
 
+## 🔌 插件系统落地（2026-09-05）
+
+原状：LuaJ 依赖与 `LuaPluginSandbox` 骨架早已存在，但无任何调用方、
+JNI 三个桥（get/set_param、load_preset）是空壳、设置页入口被注释隐藏。
+本轮把"参数型效果插件"做成了完整闭环：
+
+- **JNI 补齐**：`nativeGetEngineParam/nativeSetEngineParam` 按参数 key 在
+  默认管线全链查找模块并读写（gain_db/pitch_semitones/... 白名单）；
+  `nativeLoadPreset` 读取插件目录预设 JSON（路径穿越校验 + 64KB 上限）；
+  新增 `nativeSetPluginDir` 注入数据目录
+- **PluginManager（新）**：assets 内置插件首启释放 + 外部目录扫描、
+  plugin_info 元数据解析、单激活模型（激活新插件先停旧插件）、
+  activate/deactivate 后台线程执行、状态持久化（重启自动恢复）
+- **沙箱整理**：移除不可行的 processFrame 逐样本处理模型（LuaJ 性能），
+  补 metadata()/callActivate()/callDeactivate()，external 声明改 public
+  防 JNI 符号修饰
+- **UI**：设置页新增「插件」区块（列表/开关/重新扫描/错误提示），
+  **恢复模块链编辑器入口**（原注释：与 UGC 配套后恢复）
+- **内置示例**：电话音 / 花栗鼠 / 低沉大叔（assets 首启释放，可改可学）
+- **文档**：新增 `PLUGIN_API.md` 插件开发指南（API 表 / 生命周期 / 安全模型）
+
+设计取舍：**参数型插件而非逐样本音频处理**——LuaJ 解释器对 48kHz
+逐样本循环性能不可行（≈100× 慢 + JNI 双向拷贝），参数型是性能、
+安全与表达力的平衡点；原生 .so 模块加载（NATIVE 权限级）仍留作未来方向。
+
+---
+
 ## 瓶颈：实时变声拦截需要 Root（未变）
 
 **这仍是整个项目最大的平台级卡点**（与 DSP 质量无关）：

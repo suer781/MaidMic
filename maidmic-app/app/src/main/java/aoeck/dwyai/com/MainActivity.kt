@@ -271,6 +271,9 @@ fun MaidMicMain(context: Context) {
         PipelineController.initDefaultChain(eqPrefs)
         pipelineNodes = buildPipelineNodes()
         AppLogger.i("Pipeline", "默认模块链已同步到 UI: ${pipelineNodes.size} 个节点")
+
+        // 插件系统：恢复上次激活的效果插件（后台线程，激活状态持久化于 maidmic_prefs）
+        aoeck.dwyai.com.plugins.lua.PluginManager.get(context).restoreLastActive()
     }
 
     // ============================================================
@@ -389,6 +392,7 @@ fun MaidMicMain(context: Context) {
                     context = context,
                     enableLraRhythm = enableLraRhythm,
                     onLraRhythmToggle = { enableLraRhythm = it },
+                    onOpenEditor = { showEditor = true },
                     onOpenDeveloperSettings = { showDeveloperSettings = true }
                 )
             }

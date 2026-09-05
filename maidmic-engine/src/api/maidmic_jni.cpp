@@ -12,12 +12,15 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <cstdio>
+#include <cctype>
 
 #include "maidmic/pipeline.h"
 #include "maidmic/module.h"
 
 #define LOG_TAG "MaidMic-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 #ifdef __cplusplus
@@ -1025,24 +1028,152 @@ Java_aoeck_dwyai_com_bridge_root_RootMicBridge_nativeWriteToVirtualDevice(
     return -1;
 }
 
+// ============================================================
+// Lua 插件沙箱桥（插件系统：参数型效果插件）
+// ============================================================
+// Lua 脚本经 maidmic.set_param/get_param 读写默认管线模块参数，
+// nativeLoadPreset 读取插件目录下的预设数据文件。
+// 参数查找规则：按参数 key 在默认管线全部模块中查找（key 全局唯一，
+// 如 gain_db / pitch_semitones / bitcrush_mix 等）。
+
+// 插件预设数据根目录（由 PluginManager 经 nativeSetPluginDir 注入）
+static char g_plugin_dir[512] = {0};
+
+JNIEXPORT void JNICALL
+Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeSetPluginDir(
+    JNIEnv* env, jobject thiz, jstring path) {
+    (void)thiz;
+    if (path == NULL) {
+        g_plugin_dir[0] = '\0';
+        return;
+    }
+    const char* p = env->GetStringUTFChars(path, NULL);
+    if (!p) return;
+    strncpy(g_plugin_dir, p, sizeof(g_plugin_dir) - 1);
+    g_plugin_dir[sizeof(g_plugin_dir) - 1] = '\0';
+    env->ReleaseStringUTFChars(path, p);
+    LOGI("Plugin dir set: %s", g_plugin_dir);
+}
+
+// 在默认管线中按参数 key 查找所属模块，返回节点（找不到返回 NULL）
+static const maidmic_dag_node_t* find_module_by_param_key(const char* key) {
+    if (!g_default_pipeline || !key) return NULL;
+    uint32_t count = maidmic_pipeline_get_module_count(g_default_pipeline);
+    for (uint32_t i = 0; i < count; i++) {
+        const maidmic_dag_node_t* node = maidmic_pipeline_get_module_at(g_default_pipeline, i);
+        if (!node || !node->module || !node->module->vtable) continue;
+        if (node->module->vtable->get_param_info && node->userdata) {
+            uint32_t paramCount = node->module->vtable->get_param_count
+                ? node->module->vtable->get_param_count(node->userdata) : 0;
+            for (uint32_t k = 0; k < paramCount; k++) {
+                const maidmic_param_t* info =
+                    node->module->vtable->get_param_info(node->userdata, k);
+                if (info && info->key && strcmp(info->key, key) == 0) {
+                    return node;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
 JNIEXPORT jdouble JNICALL
 Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeGetEngineParam(
-    JNIEnv* env, jobject thiz, jstring) {
-    (void)env; (void)thiz;
-    return 0.0;
+    JNIEnv* env, jobject thiz, jstring key) {
+    (void)thiz;
+    if (key == NULL) return 0.0;
+    const char* k = env->GetStringUTFChars(key, NULL);
+    if (!k) return 0.0;
+
+    ensure_default_pipeline();
+    double result = 0.0;
+    const maidmic_dag_node_t* node = find_module_by_param_key(k);
+    if (node && node->module->vtable->get_param) {
+        maidmic_param_t p = node->module->vtable->get_param(node->userdata, k);
+        if (p.type == MAIDMIC_PARAM_FLOAT) result = (double)p.value.as_float;
+        else if (p.type == MAIDMIC_PARAM_INT) result = (double)p.value.as_int;
+        else if (p.type == MAIDMIC_PARAM_BOOL) result = p.value.as_bool ? 1.0 : 0.0;
+    } else {
+        LOGW("Plugin get_param: key '%s' not found", k);
+    }
+    env->ReleaseStringUTFChars(key, k);
+    return result;
 }
 
 JNIEXPORT void JNICALL
 Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeSetEngineParam(
-    JNIEnv* env, jobject thiz, jstring, jfloat) {
-    (void)env; (void)thiz;
+    JNIEnv* env, jobject thiz, jstring key, jfloat value) {
+    (void)thiz;
+    if (key == NULL) return;
+    const char* k = env->GetStringUTFChars(key, NULL);
+    if (!k) return;
+
+    ensure_default_pipeline();
+    const maidmic_dag_node_t* node = find_module_by_param_key(k);
+    if (node && node->module->vtable->set_param) {
+        maidmic_param_t p;
+        memset(&p, 0, sizeof(p));
+        p.key = k;
+        p.type = MAIDMIC_PARAM_FLOAT;
+        p.value.as_float = value;
+        // 管线可能被 Kotlin 重建：node_id 动态有效（此处 node 即时遍历所得）
+        maidmic_pipeline_set_param(g_default_pipeline, node->node_id, k, p);
+        LOGI("Plugin set_param: %s = %.3f", k, (double)value);
+    } else {
+        LOGW("Plugin set_param: key '%s' not found (ignored)", k);
+    }
+    env->ReleaseStringUTFChars(key, k);
 }
 
 JNIEXPORT jstring JNICALL
 Java_aoeck_dwyai_com_plugins_lua_LuaPluginSandbox_nativeLoadPreset(
-    JNIEnv* env, jobject thiz, jstring, jstring) {
-    (void)env; (void)thiz;
-    return NULL;
+    JNIEnv* env, jobject thiz, jstring plugin_id, jstring preset_name) {
+    (void)thiz;
+    if (plugin_id == NULL || preset_name == NULL || g_plugin_dir[0] == '\0') return NULL;
+
+    const char* pid = env->GetStringUTFChars(plugin_id, NULL);
+    const char* pname = env->GetStringUTFChars(preset_name, NULL);
+    if (!pid || !pname) {
+        if (pid) env->ReleaseStringUTFChars(plugin_id, pid);
+        if (pname) env->ReleaseStringUTFChars(preset_name, pname);
+        return NULL;
+    }
+
+    // 路径：<plugin_dir>/<pluginId>/presets/<name>.json
+    // 安全校验：pluginId/presetName 不允许路径穿越（只允许字母数字_-）
+    jstring result = NULL;
+    bool safe = true;
+    for (const char* q = pid; *q; q++) {
+        if (!isalnum((unsigned char)*q) && *q != '_' && *q != '-') { safe = false; break; }
+    }
+    for (const char* q = pname; *q && safe; q++) {
+        if (!isalnum((unsigned char)*q) && *q != '_' && *q != '-') { safe = false; break; }
+    }
+    if (safe) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s/presets/%s.json", g_plugin_dir, pid, pname);
+        FILE* f = fopen(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long size = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            if (size > 0 && size <= 64 * 1024) {  // 上限 64KB
+                char* buf = (char*)malloc((size_t)size + 1);
+                if (buf && fread(buf, 1, (size_t)size, f) == (size_t)size) {
+                    buf[size] = '\0';
+                    result = env->NewStringUTF(buf);
+                }
+                free(buf);
+            }
+            fclose(f);
+        }
+    } else {
+        LOGW("Plugin load_preset: unsafe id/name rejected");
+    }
+
+    env->ReleaseStringUTFChars(plugin_id, pid);
+    env->ReleaseStringUTFChars(preset_name, pname);
+    return result;
 }
 
 #ifdef __cplusplus

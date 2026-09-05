@@ -3,15 +3,21 @@
 // ============================================================
 // UGC 插件运行在沙箱中，权限分级管理。
 //
-// 插件用 Lua 编写，通过 MaidMic API 与引擎交互：
-//   - maidmic.get_param("gain_db")              // 获取引擎参数
-//   - maidmic.set_param("gain_db", 12.0)        // 设置引擎参数
-//   - maidmic.process_frame(input_buffer)        // 处理一帧音频
-//   - maidmic.log("message")                     // 写日志
-//   - maidmic.http_get("https://...")            // ⚠ 需要网络权限
-//   - maidmic.exec("shell_command")              // ⚠ 需要高危权限（需签名）
+// 插件模型：参数型效果插件（不做逐样本音频处理——LuaJ 解释器性能不可行）。
+// 脚本通过 maidmic.* API 与引擎交互：
+//   - maidmic.get_param("gain_db")          // 获取引擎参数（按参数 key 全链查找）
+//   - maidmic.set_param("pitch_semitones", 7) // 设置引擎参数
+//   - maidmic.load_preset("clean")          // 读取插件预设数据 JSON
+//   - maidmic.log("message")                // 写日志
+//
+// 脚本全局约定（由 PluginManager 调用）：
+//   plugin_info = { name="...", author="...", version=1, description="..." }
+//   function activate()   ... end  -- 激活时调用
+//   function deactivate() ... end  -- 停用时调用（可选）
 //
 // 权限在插件 manifest 中声明，用户安装时看到。
+// 网络与 Shell 能力（http_get/exec）仅占位：SIGNED/DANGEROUS 等级，
+// 当前版本不开放（防止 UGC 脚本越权，后续按签名体系再启用）。
 
 package aoeck.dwyai.com.plugins.lua
 
@@ -22,137 +28,113 @@ import org.luaj.vm2.lib.jse.*
 
 /**
  * Lua 插件沙箱
- * 
+ *
  * 每个插件在自己的沙箱中运行，互不干扰。
  * 沙箱限制：
- * - 默认不能访问文件系统
- * - 默认不能发起网络请求
- * - 默认不能执行 Shell 命令
- * - 只能通过 maidmic.* API 与引擎交互
- * - 超出时间限制会被强制终止
+ * - 不能访问文件系统
+ * - 不能发起网络请求
+ * - 不能执行 Shell 命令
+ * - 只能通过 maidmic.* API 与引擎参数交互
+ * - 长任务由调用方放后台线程（激活/停用均为一次性短任务）
  */
 class LuaPluginSandbox(
     val pluginId: String,
     val pluginName: String,
     private val permissionLevel: PluginPermissionLevel
 ) {
-    
+
     companion object {
         private const val TAG = "LuaPlugin"
-        private const val MAX_EXECUTION_TIME_MS = 50L  // 每帧处理不超过 50ms
+        private const val MAX_EXECUTION_TIME_MS = 50L  // 单次调用告警阈值
     }
-    
+
     // Lua 运行时
     private val globals = JsePlatform.standardGlobals()
     private var loaded = false
-    
+
     /**
-     * 加载插件脚本
-     * 
-     * @param luaSource Lua 源代码
-     * @param presetData 预设参数 JSON（可选）
+     * 加载插件脚本（执行顶层代码，读入 plugin_info / activate 等全局定义）
      */
-    fun load(luaSource: String, presetData: String? = null) {
+    fun load(luaSource: String) {
         try {
             // 设置沙箱 API
             setupSandbox()
-            
-            // 如果有预设参数，先注入
-            if (presetData != null) {
-                globals.set("maidmic_preset", LuaValue.valueOf(presetData))
-            }
-            
+
             // 加载插件
             globals.load(luaSource, "@$pluginName.lua").call()
             loaded = true
-            
+
             Log.i(TAG, "Plugin loaded: $pluginName (ID: $pluginId)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load plugin $pluginName", e)
             throw LuaPluginException("Failed to load plugin: ${e.message}")
         }
     }
-    
-    /**
-     * 调用插件的主处理函数
-     * 
-     * @param inputSamples 输入音频样本数组（float）
-     * @param sampleCount 样本数
-     * @return 处理后的音频样本数组
-     */
-    fun processFrame(inputSamples: FloatArray, sampleCount: Int): FloatArray {
-        if (!loaded) return inputSamples
-        
+
+    /** 读取脚本的 plugin_info 全局表（无则返回 null） */
+    fun metadata(): Map<String, Any?>? {
+        if (!loaded) return null
+        val info = globals.get("plugin_info") ?: return null
+        if (!info.istable()) return null
+        val map = mutableMapOf<String, Any?>()
+        for (key in arrayOf("name", "author", "version", "description")) {
+            val v = info.get(key)
+            if (!v.isnil()) map[key] = v.tojstring()
+        }
+        return map
+    }
+
+    /** 调用脚本的 activate()（不存在则跳过）。返回 false = 调用出错。 */
+    fun callActivate(): Boolean = callLifecycle("activate")
+
+    /** 调用脚本的 deactivate()（不存在则静默跳过） */
+    fun callDeactivate(): Boolean = callLifecycle("deactivate")
+
+    /** 生命周期函数通用调用：无该函数 → true（视为无操作）；出错 → false */
+    private fun callLifecycle(fnName: String): Boolean {
+        if (!loaded) return true
         return try {
-            val processFn = globals.get("process")
-            if (processFn.isfunction()) {
-                // 检查执行时间（防止恶意插件死循环导致崩溃）
-                // Check execution time (prevent malicious infinite loops)
-                val startTime = System.currentTimeMillis()
-                
-                // 创建 Lua 数组
-                val luaInput = LuaTable()
-                for (i in 0 until sampleCount.coerceAtMost(inputSamples.size)) {
-                    luaInput.set(i + 1, LuaValue.valueOf(inputSamples[i].toDouble()))
-                }
-                
-                // 调用插件 process 函数
-                val result = processFn.call(luaInput)
-                
-                val elapsed = System.currentTimeMillis() - startTime
+            val fn = globals.get(fnName)
+            if (fn.isfunction()) {
+                val start = System.currentTimeMillis()
+                fn.call()
+                val elapsed = System.currentTimeMillis() - start
                 if (elapsed > MAX_EXECUTION_TIME_MS) {
-                    Log.w(TAG, "Plugin $pluginName took ${elapsed}ms (limit: ${MAX_EXECUTION_TIME_MS}ms)")
+                    Log.w(TAG, "$fnName() took ${elapsed}ms (limit: ${MAX_EXECUTION_TIME_MS}ms)")
                 }
-                
-                // 解析返回值
-                if (result.istable()) {
-                    val table = result.checktable()
-                    val output = FloatArray(sampleCount)
-                    for (i in 0 until sampleCount) {
-                        output[i] = table.get(i + 1).tofloat()
-                    }
-                    output
-                } else {
-                    inputSamples
-                }
-            } else {
-                // 插件没有 process 函数，可能是纯预设
-                inputSamples
             }
+            true
         } catch (e: Exception) {
-            Log.e(TAG, "Plugin $pluginName process error", e)
-            inputSamples  // 出错时直通（不崩）
+            Log.e(TAG, "$fnName() 执行出错", e)
+            false
         }
     }
     
     /**
      * 设置沙箱 API
-     * 
+     *
      * 把 maidmic.* API 注入 Lua 全局环境。
      * 根据权限等级开放不同功能。
      */
     private fun setupSandbox() {
         val maidmic = LuaTable()
-        
-        // maidmic.get_param(key) — 获取引擎参数
-        // All permission levels: read parameters
+
+        // maidmic.get_param(key) — 获取引擎参数（按参数 key 在默认管线全链查找）
         maidmic.set("get_param", object : OneArgFunction() {
             override fun call(key: LuaValue): LuaValue {
-                // 这里通过 JNI 调用 C 引擎获取参数值
                 val value = nativeGetEngineParam(key.checkjstring())
                 return LuaValue.valueOf(value)
             }
         })
-        
+
         // maidmic.set_param(key, value) — 设置引擎参数
-        // All permission levels: set parameters
         maidmic.set("set_param", object : TwoArgFunction() {
             override fun call(key: LuaValue, value: LuaValue): LuaValue {
                 nativeSetEngineParam(key.checkjstring(), value.tofloat())
                 return LuaValue.NIL
             }
         })
-        
+
         // maidmic.log(msg) — 写日志
         maidmic.set("log", object : OneArgFunction() {
             override fun call(msg: LuaValue): LuaValue {
@@ -160,18 +142,17 @@ class LuaPluginSandbox(
                 return LuaValue.NIL
             }
         })
-        
-        // maidmic.sleep(ms) — 休眠（仅计时、非实时模式）
-        // 限制最大休眠时间，防止插件挂起引擎
-        maidmic.set("sleep", object : OneArgFunction() {
-            override fun call(ms: LuaValue): LuaValue {
-                val sleepMs = ms.checklong().coerceIn(0, 100)
-                Thread.sleep(sleepMs)
-                return LuaValue.NIL
+
+        // maidmic.load_preset(name) — 读取插件预设数据（<插件目录>/<pluginId>/presets/<name>.json）
+        maidmic.set("load_preset", object : OneArgFunction() {
+            override fun call(name: LuaValue): LuaValue {
+                val presetName = name.checkjstring()
+                val presetJson = nativeLoadPreset(pluginId, presetName)
+                return if (presetJson != null) LuaValue.valueOf(presetJson) else LuaValue.NIL
             }
         })
-        
-        // === 需要网络权限的功能（🟡 签名插件以上） ===
+
+        // === 需要网络权限的功能（🟡 签名插件以上）—— 占位不开放 ===
         if (permissionLevel >= PluginPermissionLevel.SIGNED) {
             maidmic.set("http_get", object : OneArgFunction() {
                 override fun call(url: LuaValue): LuaValue {
@@ -180,8 +161,8 @@ class LuaPluginSandbox(
                 }
             })
         }
-        
-        // === 需要高危权限的功能（🔴 高危权限） ===
+
+        // === 需要高危权限的功能（🔴 高危权限）—— 占位不开放 ===
         if (permissionLevel >= PluginPermissionLevel.DANGEROUS) {
             maidmic.set("exec", object : OneArgFunction() {
                 override fun call(cmd: LuaValue): LuaValue {
@@ -190,21 +171,7 @@ class LuaPluginSandbox(
                 }
             })
         }
-        
-        // 注入预设加载功能
-        // Inject preset loading capability
-        maidmic.set("load_preset", object : OneArgFunction() {
-            override fun call(name: LuaValue): LuaValue {
-                val presetName = name.checkjstring()
-                // 从插件包中加载预设 JSON
-                val presetJson = nativeLoadPreset(pluginId, presetName)
-                if (presetJson != null) {
-                    return LuaValue.valueOf(presetJson)
-                }
-                return LuaValue.NIL
-            }
-        })
-        
+
         globals.set("maidmic", maidmic)
         
         // 移除危险全局函数
@@ -218,11 +185,12 @@ class LuaPluginSandbox(
     }
     
     fun isLoaded(): Boolean = loaded
-    
-    // JNI bridges to C engine
-    private external fun nativeGetEngineParam(key: String): Double
-    private external fun nativeSetEngineParam(key: String, value: Float)
-    private external fun nativeLoadPreset(pluginId: String, presetName: String): String?
+
+    // JNI bridges to C engine（external 声明为 public，保证 JNI 符号无 Kotlin 修饰）
+    external fun nativeGetEngineParam(key: String): Double
+    external fun nativeSetEngineParam(key: String, value: Float)
+    external fun nativeLoadPreset(pluginId: String, presetName: String): String?
+    external fun nativeSetPluginDir(path: String)
 }
 
 /**
