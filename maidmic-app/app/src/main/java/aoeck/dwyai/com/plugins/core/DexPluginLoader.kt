@@ -32,9 +32,11 @@ object DexPluginLoader {
 
     private const val EXT_DIR_NAME = "maidmic_plugins_ext"
 
-    /** 插件包目录 */
-    fun extDir(context: Context): File =
-        File(context.getExternalFilesDir(null), EXT_DIR_NAME).apply { mkdirs() }
+    /** 插件包目录（getExternalFilesDir 为 null 时回退 filesDir） */
+    fun extDir(context: Context): File {
+        val base = context.getExternalFilesDir(null) ?: context.filesDir
+        return File(base, EXT_DIR_NAME).apply { mkdirs() }
+    }
 
     /** 扫描目录下所有插件包并解析清单（无 plugin.json 或缺 entry 的包跳过） */
     fun scan(context: Context): List<ExtPluginPackage> {

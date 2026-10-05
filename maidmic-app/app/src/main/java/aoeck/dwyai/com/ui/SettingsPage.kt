@@ -47,6 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import aoeck.dwyai.com.AppLogger
 import aoeck.dwyai.com.AudioEngine
@@ -263,6 +265,9 @@ fun SettingsPage(
                                     sampleRate = rate
                                     eqPrefs.edit().putInt("sample_rate", rate).apply()
                                     srExpanded = false
+                                    // 采样率变化时重配 DSP 插件链（非 48k 钳到 48k，与录音器一致）
+                                    val actual = rate.takeIf { it == 48000 } ?: 48000
+                                    aoeck.dwyai.com.plugins.core.DspPluginChain.reconfigure(actual, 1)
                                 }
                             )
                         }
@@ -430,7 +435,7 @@ fun SettingsPage(
                 Spacer(Modifier.height(MaidMicSpacing.s))
 
                 // GitHub 链接
-                LinkRow("GitHub 仓库", "https://github.com/aoeck/MaidMic", context)
+                LinkRow("GitHub 仓库", "https://github.com/suer781/MaidMic", context)
 
                 Spacer(Modifier.height(MaidMicSpacing.xs))
 
@@ -543,12 +548,17 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
             }
             dspEnabledIds = context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
                 .getStringSet("dsp_plugin_active", emptySet()) ?: emptySet()
+            // 恢复上次启用的 DSP 插件（persist/restore 闭环）
+            val eqPrefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+            val sampleRate = eqPrefs.getInt("sample_rate", 48000).takeIf { it == 48000 } ?: 48000
+            aoeck.dwyai.com.plugins.core.DspPluginChain.restore(context, sampleRate, 1)
         }
     }
 
     // 内置参考模型（Tier 3 无依赖实现）
     val builtInModel = remember { aoeck.dwyai.com.plugins.model.SpectralMorphModel() }
     var modelBusy by remember { mutableStateOf(false) }
+    var modelBusyPkg by remember { mutableStateOf<String?>(null) }
     var modelMsg by remember { mutableStateOf<String?>(null) }
 
     GradientCard(modifier = Modifier.fillMaxWidth()) {
@@ -584,7 +594,7 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
                         } else {
                             pm.deactivate()
                         }
-                        pm.saveActiveState()
+                        // 持久化由 PluginManager 在状态更新后自行完成
                     },
                     subtitle = buildString {
                         append(plugin.description.ifEmpty { "效果插件" })
@@ -664,25 +674,50 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
                 )
             } else {
                 dspPackages.forEach { pkg ->
-                    SwitchRow(
-                        label = pkg.name,
-                        checked = pkg.id in dspEnabledIds,
-                        onCheckedChange = { wantOn ->
-                            HapticHelper.basic()
-                            if (wantOn) {
-                                aoeck.dwyai.com.plugins.core.DspPluginChain.enable(
-                                    context, pkg, sampleRate = 48000, channels = 1
-                                ) { ok, msg ->
-                                    if (!ok) modelMsg = "DSP 插件启用失败: $msg"
+                    val eqPrefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+                    val sampleRate = eqPrefs.getInt("sample_rate", 48000).takeIf { it == 48000 } ?: 48000
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        SwitchRow(
+                            label = pkg.name,
+                            checked = pkg.id in dspEnabledIds,
+                            onCheckedChange = { wantOn ->
+                                HapticHelper.basic()
+                                if (wantOn) {
+                                    aoeck.dwyai.com.plugins.core.DspPluginChain.enable(
+                                        context, pkg, sampleRate = sampleRate, channels = 1
+                                    ) { ok, msg ->
+                                        if (ok) {
+                                            dspEnabledIds = dspEnabledIds + pkg.id
+                                        } else {
+                                            modelMsg = "DSP 插件启用失败: $msg"
+                                        }
+                                    }
+                                } else {
+                                    aoeck.dwyai.com.plugins.core.DspPluginChain.disable(context, pkg.id)
+                                    dspEnabledIds = dspEnabledIds - pkg.id
                                 }
-                            } else {
-                                aoeck.dwyai.com.plugins.core.DspPluginChain.disable(context, pkg.id)
+                            },
+                            subtitle = pkg.description.ifEmpty { pkg.author },
+                        )
+                        // 卸载按钮（删除插件包文件）
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    HapticHelper.basic()
+                                    aoeck.dwyai.com.plugins.core.DspPluginChain.disable(context, pkg.id)
+                                    dspEnabledIds = dspEnabledIds - pkg.id
+                                    val deleted = pkg.file.delete()
+                                    modelMsg = if (deleted) "已卸载 DSP 插件：${pkg.name}" else "卸载失败（文件占用？）：${pkg.name}"
+                                    rescanTick++
+                                }
+                            ) {
+                                Text("卸载", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                             }
-                            dspEnabledIds = if (wantOn) dspEnabledIds + pkg.id
-                            else dspEnabledIds - pkg.id
-                        },
-                        subtitle = pkg.description.ifEmpty { pkg.author },
-                    )
+                        }
+                    }
                 }
             }
 
@@ -746,16 +781,65 @@ private fun PluginSection(onOpenEditor: () -> Unit) {
                 )
             } else {
                 modelPackages.forEach { pkg ->
-                    Text(
-                        pkg.name + " · " + pkg.author,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        pkg.description,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = MaidMicSpacing.xs)) {
+                        Text(
+                            pkg.name + " · " + pkg.author,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            pkg.description,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            // 应用到最近语音包
+                            TextButton(
+                                enabled = modelBusyPkg == null,
+                                onClick = {
+                                    HapticHelper.basic()
+                                    val latest = aoeck.dwyai.com.voicepack.VoicePackStore.getLatest(context)
+                                    if (latest == null) {
+                                        modelMsg = "暂无语音包，先录一段再应用模型"
+                                        return@TextButton
+                                    }
+                                    modelBusyPkg = pkg.id
+                                    modelMsg = "转换中…"
+                                    Thread {
+                                        try {
+                                            val model = aoeck.dwyai.com.plugins.core.DexPluginLoader.loadModelPlugin(context, pkg)
+                                            model.loadModel(null)
+                                            aoeck.dwyai.com.plugins.model.ModelRunner.applyToPack(
+                                                context, model, latest
+                                            ) { pack, msg ->
+                                                modelBusyPkg = null
+                                                modelMsg = if (pack != null) "已生成新语音包：${pack.name}" else "失败: $msg"
+                                            }
+                                        } catch (e: Exception) {
+                                            modelBusyPkg = null
+                                            modelMsg = "模型插件加载失败: ${e.message}"
+                                        }
+                                    }.start()
+                                }
+                            ) {
+                                Text(if (modelBusyPkg == pkg.id) "转换中…" else "应用到最近语音包", fontSize = 12.sp)
+                            }
+                            // 卸载
+                            TextButton(
+                                onClick = {
+                                    HapticHelper.basic()
+                                    val deleted = pkg.file.delete()
+                                    modelMsg = if (deleted) "已卸载模型插件：${pkg.name}" else "卸载失败（文件占用？）：${pkg.name}"
+                                    rescanTick++
+                                }
+                            ) {
+                                Text("卸载", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
                 }
             }
         }

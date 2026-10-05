@@ -395,7 +395,9 @@ object PipelineController {
      * 返回 ChainSnapshot，包含引擎标识与各模块状态。
      */
     fun snapshotCurrentChain(): ChainSnapshot {
-        val engine = NativeAudioProcessor.getEngine().name
+        // 用 engine.key（小写，如 "echio_eq"）而不是 name（大写），
+        // 与 VoicePackRecorder.captureChainSnapshot / VoicePackListPage.toSummary 对齐
+        val engine = NativeAudioProcessor.getEngine().key
         val modules = _chain.map { inst ->
             ModuleState(
                 moduleId = inst.moduleId,

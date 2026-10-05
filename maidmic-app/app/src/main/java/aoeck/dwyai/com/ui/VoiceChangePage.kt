@@ -196,10 +196,11 @@ fun VoiceChangePage(
     // ---------- 录音存包状态（VoicePackRecorder：录音 → 实时变声 → 存包） ----------
     val packRecorder = remember { VoicePackRecorder(context) }
     var packRecording by remember { mutableStateOf(false) }
-    // 最长录 10 秒自动停止，避免忘记停止导致一直录音
+    // 最长录音时长自动停止（读取设置，默认 30s），避免忘记停止导致一直录音
     LaunchedEffect(packRecording) {
         if (packRecording) {
-            delay(10_000)
+            val maxSec = eqPrefs.getInt("max_recording_duration", 30)
+            delay(maxSec * 1000L)
             packRecorder.stopRecording(0)
         }
     }

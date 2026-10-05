@@ -13,7 +13,8 @@
 //   每声道独立输入滑窗（30ms）累积 → 窗满时 maidmic_detect_pitch 检基频 f0
 //   → 量化到音阶得目标音 ftarget → 实际修正半音 = 12*log2(ftarget/f0)*retune
 //   → 目标比率 = 2^(实际修正/12)，一阶平滑（speed 越大收敛越快）
-//   → 块内线性插值重采样（读指针按声道独立、跨块持续），输出与输入等长。
+//   → 跨块连续历史环线性插值重采样（读位置绝对、跨块持续；升调回跳/降调前跳
+//     处线性交叉淡化拼接），输出与输入等长，消除旧实现"块尾回绕块首"的断裂。
 //   非浊音（未检出基频）不更新目标比率，保持上一比率。
 //
 // 量化公式：
@@ -45,6 +46,20 @@
 #define AT_S16_SCALE_IN  (1.0f / 32768.0f)  // S16 → float 归一化系数
 #define AT_S16_SCALE_OUT 32767.0f           // float → S16 归一化系数
 
+// ---- 跨块连续重采样（历史环 + 拼接交叉淡化）----
+// 旧实现"块内线性插值 + 块尾回绕块首"：读指针按块循环，块边界波形断裂（"卡卡"）。
+// 新实现参考 src/dsp/pitch.c 的 hist/read_pos 方案：每声道维护历史环，读位置绝对
+// 跨块持续；升调读头逼近写头时回跳、降调读头落后过多时前跳，拼接处用线性交叉
+// 淡化过渡，消除块边界与拼接点的硬断裂。
+#define AT_HIST_CAP    16384u   // 历史环容量（2 的幂）
+#define AT_HIST_MASK   (AT_HIST_CAP - 1u)
+#define AT_DELAY_INIT  2048u    // 初始读延迟（样本，≈43ms @48k；为插值提供前瞻）
+#define AT_MARGIN      512u     // 读头与写头最小安全间距（样本）
+#define AT_MAX_LEAD    8192u    // 读头落后写头超过此值 → 前跳拼接（降调）
+#define AT_BACK_JUMP   4096u    // 升调回跳量（样本）
+#define AT_FWD_JUMP    4096u    // 降调前跳量（样本）
+#define AT_FADE        256u    // 拼接交叉淡化窗口（样本，≈5ms @48k）
+
 // ============================================================
 // 模块实例数据
 // Module instance data
@@ -57,9 +72,17 @@ typedef struct {
     float* stretch;      // 变速输出滑窗（环，容量 = window_len + AT_MAX_BLOCK）
     uint32_t sread;      // 变速滑窗读位置
     uint32_t s_avail;    // 变速滑窗可读样本数（未消费部分保留到下一块）
-    float pos;           // 块内插值读指针（样本索引，按声道独立、跨块持续，块尾循环）
+    float pos;           // （保留字段，兼容旧结构；新实现不再使用）
     float ratio;         // 当前（平滑后）变调比率
     float ratio_target;  // 目标比率（量化 + retune 后，仅浊音帧更新）
+
+    // ---- 跨块连续重采样状态（历史环）----
+    float* hist;         // 输入历史环 [AT_HIST_CAP]
+    uint64_t hist_wpos;  // 已写入样本数（绝对）
+    float rpos;          // 连续读位置（绝对，跨块持续）
+    float fade_old;      // 淡化期间旧轨迹读位置
+    float fade_new;      // 淡化期间新轨迹读位置
+    uint32_t fade_left;  // 淡化剩余样本数（0 = 未在淡化）
 } at_channel_t;
 
 typedef struct {
@@ -194,6 +217,13 @@ static void at_reset_channel(at_data_t* a, uint32_t ch) {
     c->pos = 0.0f;
     c->ratio = 1.0f;        // 比率 1.0 → 重采样退化为直通（身份映射）
     c->ratio_target = 1.0f;
+    // 历史环复位：预置 AT_DELAY_INIT 样本零（前导静音），写头从延迟位置开始
+    if (c->hist) memset(c->hist, 0, AT_HIST_CAP * sizeof(float));
+    c->hist_wpos = AT_DELAY_INIT;
+    c->rpos = 0.0f;
+    c->fade_old = 0.0f;
+    c->fade_new = 0.0f;
+    c->fade_left = 0;
 }
 
 // ============================================================
@@ -222,6 +252,7 @@ static void at_destroy(void* userdata) {
     for (uint32_t ch = 0; ch < AT_MAX_CHANNELS; ch++) {
         free(a->ch[ch].in_win);
         free(a->ch[ch].stretch);
+        free(a->ch[ch].hist);
     }
     free(a);
 }
@@ -251,10 +282,12 @@ static bool at_setup(void* userdata, uint32_t sample_rate, uint16_t channels) {
     for (uint32_t ch = 0; ch < AT_MAX_CHANNELS; ch++) {
         a->ch[ch].in_win = (float*)malloc((size_t)a->in_win_cap * sizeof(float));
         a->ch[ch].stretch = (float*)malloc((size_t)a->stretch_cap * sizeof(float));
-        if (a->ch[ch].in_win == NULL || a->ch[ch].stretch == NULL) {
+        a->ch[ch].hist = (float*)calloc(AT_HIST_CAP, sizeof(float));
+        if (a->ch[ch].in_win == NULL || a->ch[ch].stretch == NULL || a->ch[ch].hist == NULL) {
             for (uint32_t j = 0; j <= ch; j++) {
                 free(a->ch[j].in_win);   a->ch[j].in_win = NULL;
                 free(a->ch[j].stretch);  a->ch[j].stretch = NULL;
+                free(a->ch[j].hist);     a->ch[j].hist = NULL;
             }
             return false;
         }
@@ -377,10 +410,21 @@ static maidmic_param_t at_get_param(void* userdata, const char* key) {
 // 核心：单声道处理
 // Core: per-channel processing
 // ============================================================
-// 原地处理（输入输出共用 scratch）：输入先复制进滑窗，之后只在变速生成阶段
-// 读取本块（块尾循环），生成完毕才把变速输出写回 scratch，故写回安全。
-// 顺序：追加滑窗 → 窗满检基频并量化 → 一阶平滑比率 → 变速输出滑窗等长输出。
+// 原地处理（输入输出共用 scratch）：输入先复制进滑窗并追加到历史环，之后只在
+// 变速生成阶段读取历史环（不再读本块），生成完毕才把变速输出写回 scratch，故写
+// 回安全。重采样采用跨块连续历史环（读位置绝对、跨块持续），升调回跳/降调前跳
+// 处用线性交叉淡化拼接，消除旧实现"块尾回绕块首"的块边界波形断裂。
+// 顺序：追加滑窗 → 窗满检基频并量化 → 一阶平滑比率 → 历史环连续重采样等长输出。
 // 热路径零堆分配。
+
+// 历史环线性插值读取（pos 为绝对位置，自动折绕环容量）
+static inline float at_hist_interp(const float* hist, float pos) {
+    uint64_t i0 = (uint64_t)pos;
+    float frac = pos - (float)i0;
+    float s0 = hist[i0 & AT_HIST_MASK];
+    float s1 = hist[(i0 + 1) & AT_HIST_MASK];
+    return s0 + (s1 - s0) * frac;
+}
 
 static void at_process_channel(at_data_t* a, uint32_t ch, uint32_t fc) {
     at_channel_t* c = &a->ch[ch];
@@ -389,7 +433,7 @@ static void at_process_channel(at_data_t* a, uint32_t ch, uint32_t fc) {
     const uint32_t wlen = a->window_len;
 
     // 该声道未配置（setup 声道数不匹配等异常）→ 直通（in == out，原地）
-    if (c->in_win == NULL || wlen == 0) return;
+    if (c->in_win == NULL || wlen == 0 || c->hist == NULL) return;
 
     // ---- 1. 当前块追加进输入滑窗 ----
     // 不变量：块间 in_count < wlen，故追加后 in_count < wlen + AT_MAX_BLOCK = 容量
@@ -423,33 +467,58 @@ static void at_process_channel(at_data_t* a, uint32_t ch, uint32_t fc) {
     if (ratio < AT_RATIO_MIN) ratio = AT_RATIO_MIN;
     if (ratio > AT_RATIO_MAX) ratio = AT_RATIO_MAX;
 
-    // ---- 4. 变速输出滑窗：块内线性插值重采样（输出与输入等长）----
-    // 对本块 in[0..fc) 按比率 ratio 顺序读取（读指针 c->pos 跨块持续）；
-    // 读到块尾时循环回绕（块尾样本循环填充，产生等长的变调样本流）。
-    // 变速样本先写入 stretch 环，再读满 fc 个输出；未消费部分保留到下一块
-    // （本实现生成量恰为消费量，余量恒为 0，与 voice_transform 一致）。
-    while (c->s_avail < fc) {
-        // 块内线性插值：s = in[p] + (in[p+1] - in[p]) * frac
-        const uint32_t p = (uint32_t)c->pos;
-        const float frac = c->pos - (float)p;
-        // 块尾时保持末样本（hold）而非回绕到块首：
-        // 回绕会插值到本块开头样本（与原信号不相邻），产生块边界周期失真"卡卡"；
-        // 保持末样本使边界处插值斜率为 0，过渡更平滑。
-        const uint32_t p1 = (p + 1u >= fc) ? fc - 1u : p + 1u;
-        const float s0 = in[p];
-        const float s1 = in[p1];
-        c->stretch[(c->sread + c->s_avail) % a->stretch_cap] = s0 + (s1 - s0) * frac;
-        c->s_avail++;
-        // 读指针按比率推进；越过块尾时循环回绕（ratio <= 2，循环必终止）
-        c->pos += ratio;
-        while (c->pos >= (float)fc) c->pos -= (float)fc;
-    }
-    // 从变速滑窗读满 frame_count 个样本作为本块输出（等长）
+    // ---- 4. 跨块连续重采样：历史环 + 拼接交叉淡化（输出与输入等长）----
+    // 4.1 本块输入追加进历史环
     for (uint32_t i = 0; i < fc; i++) {
-        out[i] = c->stretch[(c->sread + i) % a->stretch_cap];
+        c->hist[(size_t)((c->hist_wpos + i) & AT_HIST_MASK)] = in[i];
     }
-    c->sread = (c->sread + fc) % a->stretch_cap;
-    c->s_avail -= fc;  // 本实现恒为 0；余量保留到下一块
+    c->hist_wpos += fc;
+
+    for (uint32_t i = 0; i < fc; i++) {
+        // 拼接决策（淡化期间不发起新拼接）
+        if (c->fade_left == 0) {
+            const float delay = (float)c->hist_wpos - c->rpos;
+            if (ratio >= 1.0f &&
+                delay < (float)AT_MARGIN + ratio * (float)AT_FADE + (float)AT_FADE) {
+                // 升调：读头逼近写头 → 回跳拼接（重读更旧历史）
+                float new_pos = c->rpos - (float)AT_BACK_JUMP;
+                if (new_pos < 0.0f) new_pos = 0.0f;
+                c->fade_old = c->rpos;
+                c->fade_new = new_pos;
+                c->fade_left = AT_FADE;
+            } else if (ratio < 1.0f && delay > (float)AT_MAX_LEAD) {
+                // 降调：读头落后过多 → 前跳拼接（跳读更新历史）
+                float new_pos = c->rpos + (float)AT_FWD_JUMP;
+                const float max_pos = (float)c->hist_wpos - (float)AT_MARGIN;
+                if (new_pos > max_pos) new_pos = max_pos;
+                if (new_pos > c->rpos) {
+                    c->fade_old = c->rpos;
+                    c->fade_new = new_pos;
+                    c->fade_left = AT_FADE;
+                }
+            }
+        }
+
+        // 读取输出样本：淡化期间混叠新旧轨迹，否则沿 rpos 连续读取
+        float s;
+        if (c->fade_left > 0) {
+            const float s_old = at_hist_interp(c->hist, c->fade_old);
+            c->fade_old += ratio;
+            const float s_new = at_hist_interp(c->hist, c->fade_new);
+            c->fade_new += ratio;
+            const float t = 1.0f - (float)c->fade_left / (float)AT_FADE;
+            s = s_old * (1.0f - t) + s_new * t;   // 线性交叉淡化
+            c->fade_left--;
+            if (c->fade_left == 0) {
+                c->rpos = c->fade_new;
+            }
+        } else {
+            s = at_hist_interp(c->hist, c->rpos);
+            c->rpos += ratio;
+        }
+
+        out[i] = s;
+    }
 }
 
 // ============================================================

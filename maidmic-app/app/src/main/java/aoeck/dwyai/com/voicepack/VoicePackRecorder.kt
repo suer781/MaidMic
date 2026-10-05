@@ -98,6 +98,9 @@ class VoicePackRecorder(private val context: Context) {
     private var currentChainSnapshot: ChainSnapshot? = null
     private var callback: Callback? = null
 
+    // 录音采样率（从 maidmic_eq 读取，非 48k 钳到 48k 以兼容 JNI/引擎）
+    private var sampleRate: Int = SAMPLE_RATE
+
     // 录音目标文件信息（overwrite 模式下复用最近一条的 id 与 wavFile）
     private var packId: String = ""
     private var wavRelativePath: String = ""
@@ -105,6 +108,9 @@ class VoicePackRecorder(private val context: Context) {
 
     // 延迟停止的 Runnable 引用（用于取消）
     private var pendingStopRunnable: Runnable? = null
+
+    // 最大录音时长自动停止（从 maidmic_eq 读取）
+    private var maxDurationRunnable: Runnable? = null
 
     /** 当前是否正在录音。供 UI 查询以禁用 DSP 链菜单。 */
     fun isRecording(): Boolean = recording
@@ -135,6 +141,10 @@ class VoicePackRecorder(private val context: Context) {
             mainHandler.post { callback.onError(msg) }
             return
         }
+
+        // 1.5 读取录音设置：采样率（非 48k 钳到 48k 以兼容 JNI/引擎）、最大时长
+        val eqPrefs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+        sampleRate = eqPrefs.getInt("sample_rate", 48000).takeIf { it == 48000 } ?: 48000
 
         // 2. 快照当前 DSP 链（在录音开始前捕获参数，保证一致性）
         currentChainSnapshot = captureChainSnapshot()
@@ -178,6 +188,8 @@ class VoicePackRecorder(private val context: Context) {
 
     private fun recordingLoop() {
         val cb = callback ?: return
+        // 错误路径标志：出错后只回调 onError，finally 跳过 onRecordingStop，避免双回调互相覆盖
+        var failed = false
 
         // 录音+变声线程设为音频优先级（nice=-16）：
         // 录音处理为实时任务，调度抖动会导致 read 阻塞时长波动、块边界不齐，听感卡顿
@@ -187,10 +199,11 @@ class VoicePackRecorder(private val context: Context) {
 
         try {
             // ---- 创建 AudioRecord ----
-            val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+            val minBuf = AudioRecord.getMinBufferSize(sampleRate, CHANNEL_CONFIG, AUDIO_FORMAT)
             if (minBuf <= 0) {
                 val msg = "AudioRecord.getMinBufferSize 失败: $minBuf"
                 AppLogger.e(TAG, msg)
+                failed = true
                 mainHandler.post { cb.onError(msg) }
                 return
             }
@@ -202,7 +215,7 @@ class VoicePackRecorder(private val context: Context) {
             val recorder = try {
                 AudioRecord(
                     MediaRecorder.AudioSource.MIC,
-                    SAMPLE_RATE,
+                    sampleRate,
                     CHANNEL_CONFIG,
                     AUDIO_FORMAT,
                     bufferBytes,
@@ -210,6 +223,7 @@ class VoicePackRecorder(private val context: Context) {
             } catch (e: Exception) {
                 val msg = "AudioRecord 创建失败: ${e.message}"
                 AppLogger.e(TAG, msg, e)
+                failed = true
                 mainHandler.post { cb.onError(msg) }
                 return
             }
@@ -218,21 +232,34 @@ class VoicePackRecorder(private val context: Context) {
                 val msg = "AudioRecord 未初始化 (state=$stateName)"
                 AppLogger.e(TAG, msg)
                 recorder?.release()
+                failed = true
                 mainHandler.post { cb.onError(msg) }
                 return
             }
             audioRecord = recorder
 
             // ---- 创建 WavWriter 并写头 ----
-            val writer = WavWriter(wavFile!!, SAMPLE_RATE, channels = 1, bitsPerSample = 16)
+            val writer = WavWriter(wavFile!!, sampleRate, channels = 1, bitsPerSample = 16)
             writer.start()
             wavWriter = writer
 
             // ---- 启动录音 ----
             recorder.startRecording()
             recording = true
-            AppLogger.i(TAG, "录音已启动 id=$packId sr=$SAMPLE_RATE buf=$bufferBytes")
+            AppLogger.i(TAG, "录音已启动 id=$packId sr=$sampleRate buf=$bufferBytes")
             mainHandler.post { cb.onRecordingStart() }
+
+            // ---- 最大录音时长自动停止（读取 maidmic_eq 设置）----
+            val maxDurationMs = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+                .getInt("max_recording_duration", 30) * 1000L
+            val maxRunnable = Runnable {
+                if (recording) {
+                    AppLogger.i(TAG, "达到最大录音时长（${maxDurationMs}ms），自动停止")
+                    stopRecording(0)
+                }
+            }
+            maxDurationRunnable = maxRunnable
+            mainHandler.postDelayed(maxRunnable, maxDurationMs)
 
             // ---- 录音 + 变声 + 写盘循环 ----
             val inBuf = ByteArray(PROCESS_BLOCK_BYTES)
@@ -256,6 +283,7 @@ class VoicePackRecorder(private val context: Context) {
                                 break
                             }
                             AppLogger.e(TAG, "录音读取错误: read=$read")
+                            failed = true
                             mainHandler.post { cb.onError("录音读取错误 (code=$read)") }
                             break
                         }
@@ -277,12 +305,16 @@ class VoicePackRecorder(private val context: Context) {
                 }
         } catch (e: Exception) {
             AppLogger.e(TAG, "录音线程异常", e)
+            failed = true
             mainHandler.post { cb.onError("录音异常: ${e.message}") }
         } finally {
-            // ---- 清理资源 + 落盘 VoicePack ----
+            // ---- 清理资源（错误路径也清理；但只回调 onError，不回调 onRecordingStop）----
             val pack = finishRecording()
             recording = false
-            mainHandler.post { cb.onRecordingStop(pack) }
+            cancelMaxDuration()
+            if (!failed) {
+                mainHandler.post { cb.onRecordingStop(pack) }
+            }
         }
     }
 
@@ -321,6 +353,11 @@ class VoicePackRecorder(private val context: Context) {
             recording = false
             AppLogger.i(TAG, "stopRecording: 立即停止")
         }
+    }
+
+    /** 取消最大录音时长定时器（停止/结束/出错时调用） */
+    private fun cancelMaxDuration() {
+        maxDurationRunnable?.let { mainHandler.removeCallbacks(it); maxDurationRunnable = null }
     }
 
     // ============================================================
@@ -362,7 +399,7 @@ class VoicePackRecorder(private val context: Context) {
             name = VoicePackStore.defaultName(recordingStartTime),
             wavFile = wavRelativePath,
             durationMs = durationMs,
-            sampleRate = SAMPLE_RATE,
+            sampleRate = sampleRate,
             createdAt = recordingStartTime,
             chainSnapshot = snap,
         )

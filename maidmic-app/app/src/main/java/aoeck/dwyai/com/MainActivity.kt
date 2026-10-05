@@ -8,16 +8,10 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioManager
-import android.media.AudioRecord
-import android.media.AudioTrack
-import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
-import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -272,8 +266,20 @@ fun MaidMicMain(context: Context) {
         pipelineNodes = buildPipelineNodes()
         AppLogger.i("Pipeline", "默认模块链已同步到 UI: ${pipelineNodes.size} 个节点")
 
-        // 插件系统：恢复上次激活的效果插件（后台线程，激活状态持久化于 maidmic_prefs）
-        aoeck.dwyai.com.plugins.lua.PluginManager.get(context).restoreLastActive()
+        // 插件系统：先后台扫描，扫描完成后再恢复上次激活的效果插件。
+        // （旧实现直接 restoreLastActive()，此时 plugins 列表为空导致恢复失效）
+        val pluginManager = aoeck.dwyai.com.plugins.lua.PluginManager.get(context)
+        pluginManager.refresh()
+        pluginManager.awaitLoaded {
+            pluginManager.restoreLastActive()
+        }
+
+        // Tier 2 DSP 插件链：启动时根据持久化 id 重新加载（persist/restore 闭环）
+        if (aoeck.dwyai.com.plugins.core.PluginSecurity.isUgcEnabled(context)) {
+            val eqPrefs2 = context.getSharedPreferences("maidmic_eq", Context.MODE_PRIVATE)
+            val sr = eqPrefs2.getInt("sample_rate", 48000).takeIf { it == 48000 } ?: 48000
+            aoeck.dwyai.com.plugins.core.DspPluginChain.restore(context, sr, 1)
+        }
     }
 
     // ============================================================
@@ -617,194 +623,3 @@ fun MicModeCard(title: String, desc: String, icon: ImageVector, onClick: () -> U
 // ============================================================
 
 enum class TestState { IDLE, RECORDING, PLAYING }
-
-private fun startVoiceTest(
-    context: Context,
-    durationSec: Int,
-    onStateChange: (TestState) -> Unit,
-    onProgress: (Int) -> Unit,
-    onError: (String) -> Unit = { msg -> Toast.makeText(context, msg, Toast.LENGTH_SHORT).show() }
-) {
-    // 处理块大小：2048 样本/块 @ 48kHz（16-bit mono → 4096 字节 ≈ 42.7ms），
-    // 块适中：过大增加首字延迟，过小造成频繁 JNI 调用。
-    val sampleRate = 48000
-    val bufferSize = 4096
-    val totalSamples = sampleRate * durationSec
-    val allPcm = mutableListOf<ByteArray>()
-
-    // API 兼容性检查
-    val apiLevel = Build.VERSION.SDK_INT
-    AppLogger.i("Test", "API level=$apiLevel, sampleRate=$sampleRate, bufferSize=$bufferSize")
-
-    // 不同 Android 版本使用不同的 AudioRecord 构建方式
-    val useNewBuilder = apiLevel >= 23 // AudioRecord.Builder 从 API 23 可用
-
-    // 先检查权限
-    val hasMic = ContextCompat.checkSelfPermission(context,
-        Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    if (!hasMic) {
-        val msg = "缺少录音权限，请在设置中授予"
-        AppLogger.e("Test", msg)
-        onError(msg)
-        return
-    }
-
-    // 录音→处理→回放全程在后台线程执行，不阻塞 UI 线程。
-    // 如需更低延迟可把线程优先级提到 Process.THREAD_PRIORITY_AUDIO(-16)。
-    Thread {
-        AppLogger.i("Test", "开始录音 (${durationSec}s)")
-        onStateChange(TestState.RECORDING)
-
-        // 录音/回放前请求音频焦点（AUDIOFOCUS_GAIN_TRANSIENT），结束后在 finally 放弃。
-        // 备选方案：setMode(MODE_IN_COMMUNICATION) 后恢复原模式；
-        // 此处选 requestAudioFocus，避免全局改动音频模式影响其他应用。
-        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        @Suppress("DEPRECATION")
-        val focusGranted = audioManager.requestAudioFocus(
-            null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
-        ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-        AppLogger.i("Test", "请求音频焦点: ${if (focusGranted) "成功" else "失败"}")
-
-        var recorder: AudioRecord? = null
-        var track: AudioTrack? = null
-        try {
-            // ---- 录音 ----
-            // 缓冲 ≥ max(getMinBufferSize, 2×块字节)，避免 read 因缓冲过小频繁阻塞
-            val minRecBuf = AudioRecord.getMinBufferSize(
-                sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-            )
-            val recBufSize = if (minRecBuf > 0) maxOf(minRecBuf, bufferSize * 2) else bufferSize * 2
-            recorder = try {
-                AudioRecord(
-                    MediaRecorder.AudioSource.MIC,
-                    sampleRate,
-                    AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT,
-                    recBufSize
-                )
-            } catch (e: Exception) {
-                AppLogger.e("Test", "AudioRecord 创建失败", e)
-                onError("录音创建失败: ${e.message}")
-                null
-            }
-
-            if (recorder == null) {
-                return@Thread
-            }
-            val rec = recorder
-            if (rec.state != AudioRecord.STATE_INITIALIZED) {
-                AppLogger.e("Test", "AudioRecord 未初始化 (state=${rec.state})")
-                onError("录音器初始化失败 (state=${rec.state})")
-                return@Thread
-            }
-
-            rec.startRecording()
-            AppLogger.i("Test", "录音器已启动")
-            val buf = ByteArray(bufferSize)
-            var totalRead = 0
-            var secondsElapsed = 0
-            try {
-                while (totalRead < totalSamples * 2) {
-                    val read = rec.read(buf, 0, bufferSize)
-                    if (read > 0) {
-                        allPcm.add(buf.copyOf(read))
-                        totalRead += read
-                        val elapsed = totalRead / (sampleRate * 2)
-                        if (elapsed > secondsElapsed) {
-                            secondsElapsed = elapsed
-                            onProgress(secondsElapsed.coerceAtMost(durationSec))
-                        }
-                    } else if (read < 0) {
-                        AppLogger.e("Test", "录音读取错误: read=$read")
-                        onError("录音错误 (code=$read)")
-                        break
-                    }
-                }
-            } catch (e: Exception) {
-                AppLogger.e("Test", "录音读取异常", e)
-                onError("录音读取失败: ${e.message}")
-            }
-            rec.stop()
-            rec.release()
-            recorder = null
-            AppLogger.i("Test", "录音完成: ${allPcm.size} 块, ${totalRead} 字节")
-
-            // ---- 引擎处理（逐块，已在后台线程，不阻塞 UI） ----
-            AppLogger.i("Test", "开始引擎处理...")
-            onStateChange(TestState.PLAYING)
-            NativeAudioProcessor.ensureLoaded()
-            val processed = allPcm.map { chunk ->
-                val out = ByteArray(chunk.size)
-                NativeAudioProcessor.processAudio(chunk, out, chunk.size)
-                out
-            }
-            AppLogger.i("Test", "引擎处理完成: ${processed.size} 块")
-
-            val totalSize = processed.sumOf { it.size }
-            if (totalSize == 0) {
-                AppLogger.w("Test", "无有效音频数据，跳过回放")
-                return@Thread
-            }
-
-            // ---- 回放（AudioTrack STREAM 模式，48kHz / MONO / PCM16） ----
-            // 缓冲 ≥ max(getMinBufferSize, 2×块字节)，避免 write 阻塞掉块导致卡顿
-            val minTrackBuf = AudioTrack.getMinBufferSize(
-                sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
-            )
-            val trackBufSize = if (minTrackBuf > 0) maxOf(minTrackBuf, bufferSize * 2) else bufferSize * 2
-            track = try {
-                AudioTrack.Builder()
-                    .setAudioAttributes(android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build())
-                    .setAudioFormat(AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .build())
-                    .setBufferSizeInBytes(trackBufSize)
-                    .setTransferMode(AudioTrack.MODE_STREAM)
-                    .build()
-            } catch (e: Exception) {
-                AppLogger.e("Test", "AudioTrack 创建失败", e)
-                onError("回放创建失败: ${e.message}")
-                null
-            }
-            if (track == null) {
-                return@Thread
-            }
-            val tr = track
-
-            AppLogger.i("Test", "开始回放...")
-            tr.play()
-            val totalFrames = totalSize / 2 // 16-bit mono：2 字节/帧
-            for (chunk in processed) {
-                tr.write(chunk, 0, chunk.size)
-            }
-            // 等待播放完成：轮询 playbackHeadPosition 到达已写入帧数，
-            // 避免未播完即 stop() 截断长录音（50ms 轮询，最长等待 20s）
-            val deadline = SystemClock.elapsedRealtime() + 20_000L
-            while (tr.playbackHeadPosition < totalFrames && SystemClock.elapsedRealtime() < deadline) {
-                Thread.sleep(50)
-            }
-            AppLogger.i("Test", "回放完成: head=${tr.playbackHeadPosition}/$totalFrames 帧")
-        } catch (e: Exception) {
-            AppLogger.e("Test", "录音/处理/回放异常", e)
-            onError("变声测试失败: ${e.message}")
-        } finally {
-            // 收尾顺序：flush() → stop() → release()（异常时也确保释放）
-            try { track?.flush() } catch (_: Exception) {}
-            try { track?.stop() } catch (_: Exception) {}
-            try { track?.release() } catch (_: Exception) {}
-            try { recorder?.release() } catch (_: Exception) {}
-            // 恢复音频焦点
-            @Suppress("DEPRECATION")
-            if (focusGranted) {
-                audioManager.abandonAudioFocus(null)
-            }
-            onStateChange(TestState.IDLE)
-        }
-        AppLogger.i("Test", "测试结束")
-    }.start()
-}

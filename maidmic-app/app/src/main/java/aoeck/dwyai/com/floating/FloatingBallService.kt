@@ -310,6 +310,8 @@ class FloatingBallService : Service() {
      */
     private fun startRecordingInternal(overwrite: Boolean) {
         NativeAudioProcessor.ensureLoaded()
+        // 长按重录前先停止正在播放的语音包，避免外放混入新录音
+        try { player?.stop() } catch (_: Exception) {}
         val r = getRecorder()
         if (r.isRecording()) {
             AppLogger.w("FloatingBall", "startRecordingInternal: 已在录音中，忽略")

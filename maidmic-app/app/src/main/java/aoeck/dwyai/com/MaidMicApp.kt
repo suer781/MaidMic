@@ -33,8 +33,13 @@ class MaidMicApp : Application() {
         // 初始化 Shizuku 状态
         ShizukuStatus.refresh()
         
-        // 启动前台保活服务
-        startKeepAliveService()
+        // 后台保活服务：读设置（默认关闭），仅开启时启动
+        val keepAliveEnabled = hapticPrefs.getBoolean("keep_alive_enabled", false)
+        if (keepAliveEnabled) {
+            startKeepAliveService()
+        } else {
+            Log.i(TAG, "Keep-alive service disabled by settings")
+        }
         
         // 加载 Echio 引擎 native 库
         initNativeEngine()
@@ -53,6 +58,7 @@ class MaidMicApp : Application() {
             }
             Log.i(TAG, "Keep-alive service started")
         } catch (e: Exception) {
+            // 覆盖 ForegroundServiceStartNotAllowedException（后台启动受限）等所有启动失败场景
             Log.w(TAG, "Keep-alive service failed: ${e.message}")
         }
     }

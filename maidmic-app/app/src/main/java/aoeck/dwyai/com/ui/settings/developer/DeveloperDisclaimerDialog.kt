@@ -170,8 +170,6 @@ fun DeveloperSettingsPage(
 ) {
     // 是否显示免责声明弹窗
     var showDisclaimer by remember { mutableStateOf(false) }
-    // UGC 功能尚未实现：确认免责声明后弹"还没做好"提示
-    var showNotReadyDialog by remember { mutableStateOf(false) }
     
     Column(
         modifier = Modifier
@@ -224,9 +222,9 @@ fun DeveloperSettingsPage(
                         )
                         Text(
                             text = if (isChinese)
-                                "功能尚未完成，敬请期待。开启需填写免责声明（走个过场）。"
+                                "已开启：可加载自定义 DSP/模型插件（风险自担）。关闭需再次确认。"
                             else
-                                "Feature not ready yet. Enabling requires a disclaimer (just a formality).",
+                                "Enabled: load custom DSP/model plugins (at your own risk).",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -653,42 +651,12 @@ fun DeveloperSettingsPage(
             isChinese = isChinese,
             onConfirmed = {
                 showDisclaimer = false
-                // UGC 插件尚未实现：确认免责声明后也不启用，
-                // 强制保持关闭并弹窗提示用户去看其他功能
-                onUgcToggle(false)
-                showNotReadyDialog = true
+                // 确认免责声明后真正启用 UGC 插件
+                onUgcToggle(true)
             },
             onDismiss = {
                 showDisclaimer = false
                 // 用户取消了，保持关闭状态
-            }
-        )
-    }
-
-    // UGC 功能未完成提示弹窗
-    if (showNotReadyDialog) {
-        AlertDialog(
-            onDismissRequest = { showNotReadyDialog = false },
-            title = {
-                Text(
-                    text = if (isChinese) "还没做好" else "Not ready yet",
-                    fontWeight = FontWeight.Bold
-                )
-            },
-            text = {
-                Text(
-                    text = if (isChinese)
-                        "还没做好这个功能，去看看其他的？"
-                    else
-                        "This feature isn't ready yet. Check out the others?",
-                    fontSize = 14.sp,
-                    lineHeight = 20.sp
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { showNotReadyDialog = false }) {
-                    Text(if (isChinese) "好的" else "OK")
-                }
             }
         )
     }

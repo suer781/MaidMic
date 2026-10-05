@@ -89,8 +89,11 @@ end
 | `echo_delay_ms` / `echo_decay` | 回声 | 0~2000 ms / 0~0.9 |
 | `bitcrush_bits` / `bitcrush_down` / `bitcrush_mix` | 降比特 | 1~16 / 1~32 / 0~1 |
 
-> 注意：Vibrato/Chorus/AutoTune/NoiseGate/Limiter/Presence 不在默认链上，
-> 参数 key 对它们无效（需经设置页的模块链编辑器挂载后另议）。
+> 参数查找按 key 在**当前默认管线全部模块**中匹配（`find_module_by_param_key`）。
+> 默认链只含 Gain/Compressor/Bass/Treble/Reverb/VoiceTransform/Distortion/Echo/Bitcrusher；
+> 其他模块（Vibrato/Chorus/NoiseGate/Limiter 等）需先经模块链编辑器挂载到链上，
+> 其参数 key 才会被识别（AutoTune/Presence/VoiceprintMask 不在编辑器调色板中，
+> Lua 侧通常不可达）。
 
 ---
 
@@ -109,13 +112,22 @@ end
 
 ## 安全模型（Tier 1）
 
-- 脚本运行在沙箱中：`io` / `os` / `debug` / `require` / `dofile` / `loadfile`
-  全部被移除，无法访问文件系统、网络或执行命令。
+- 脚本运行在**最小 globals 沙箱**中：`luajava` / `load` / `loadstring` /
+  `dofile` / `loadfile` / `require` / `package` / `io` / `os` / `debug` /
+  `coroutine` 全部置 NIL，无法访问文件系统、网络或执行命令。
 - `maidmic.*` API 只能读写白名单内的**引擎 DSP 参数**（按参数 key 在默认
   管线中查找），无任意内存/文件访问。
+- `set_param` 拒绝 NaN / Inf 等非有限值（直接返回 NIL，不写入引擎）。
+- **死循环防护**：沙箱在脚本运行前安装 `debug.sethook` 指令计数钩子
+  （每 100000 条 VM 指令触发一次，累计 1000 次 ≈ 1e8 条指令即中断），
+  随后把 `debug` 表置 NIL，脚本无法篡改钩子。
+- **扫描不执行脚本**：插件扫描阶段只做**纯文本解析** `plugin_info` 段
+  （正则提取 name/author/version/description），绝不加载/执行 Lua 顶层代码，
+  避免"扫描即 RCE"。
 - `load_preset` 只能读取本插件目录下 `presets/*.json`，路径参数做了
-  穿越校验，文件上限 64KB。
-- 网络与命令执行 API（`http_get` / `exec`）仅为占位，当前版本不开放。
+  穿越校验（只允许字母数字 `_` `-`），文件上限 64KB。
+- 网络与命令执行 API（`http_get` / `exec`）**已移除**，当前版本对任何
+  权限级都不注册网络/Shell API。
 - 插件目录位于应用外部存储私有目录，卸载即清除。
 
 ---
@@ -142,11 +154,28 @@ interface DspAudioPlugin {
 
 ## 打包格式
 
-`.apk`（或 .zip/.jar）内含：
+`.apk` / `.jar`（zip 容器）内含：
 
 ```
 classes.dex     实现 DspAudioPlugin 的类
 plugin.json     清单：{ "id", "entry": "实现类全名", "name", "author", "description" }
+```
+
+裸 `.dex` 文件也可识别：此时 `plugin.json` 放在同目录下同名 `.json`
+（如 `my_plugin.dex` + `my_plugin.json`）。
+
+`plugin.json` 字段**全部可选（除 `entry` 外）**——加载器只强制 `entry`
+非空，缺省时 `id` 用文件名、`name` 用文件名、`author` 用「未知」、
+`description` 为空：
+
+```json
+{
+  "id": "example.ringmod",
+  "entry": "com.example.maidmic.plugin.RingModPlugin",
+  "name": "环形调制机器人（示例）",
+  "author": "MaidMic",
+  "description": "载波 30Hz 环形调制，机器人音色。"
+}
 ```
 
 放置目录：`Android/data/aoeck.dwyai.com/files/maidmic_plugins_ext/`
@@ -154,12 +183,15 @@ plugin.json     清单：{ "id", "entry": "实现类全名", "name", "author", "
 
 ## 示例工程
 
-仓库 `examples/dsp-plugin/` 是一个完整的环形调制机器人插件：
+仓库 `examples/dsp-plugin/` 是一个完整的环形调制机器人插件（已补 Gradle wrapper）：
 - `src/.../RingModPlugin.kt` 实现参考（30 行核心处理）
-- `build.gradle.kts` 含自动打包任务：`./gradlew assembleRelease`
-  → `build/outputs/plugin_ringmod.apk` 直接可用
-- 注意：`DspAudioPlugin.kt` 为接口副本（与宿主保持一致），构建期
-  compileOnly，运行时由宿主加载
+- 直接构建：`cd examples/dsp-plugin && ./gradlew assembleRelease`
+  → 产物 `build/outputs/plugin_ringmod.apk`（classes.dex + plugin.json）
+- 构建需要本机 Android SDK：`examples/dsp-plugin/local.properties` 的
+  `sdk.dir`（如 `sdk.dir=C\:\\AndroidSdk`）或 `ANDROID_HOME` 环境变量
+- 注意：`src/.../aoeck/dwyai/com/plugins/core/DspAudioPlugin.kt` 是接口副本，
+  作为**普通源文件随插件一起编译进 dex**（不是 compileOnly 依赖）；
+  宿主 DexClassLoader 加载插件时以插件包内的接口定义为准
 
 ## 性能与安全
 
@@ -193,8 +225,10 @@ interface ModelVoicePlugin {
 
 ## 运行方式
 
-- **离线转换**：设置 → 插件 → 模型插件 → 点按应用到最近语音包，
-  生成新语音包（不覆盖原包）；推理在后台线程，可耗时数秒。
+- **离线转换**：设置 → 插件 → 模型插件。外部 dex 模型插件（实现
+  `ModelVoicePlugin`）与内置参考模型都有「**应用到最近语音包**」按钮，
+  点击后对最近录音生成新语音包（不覆盖原包）；推理在后台线程，可耗时数秒。
+- **卸载**：模型插件包支持一键卸载（删除 `maidmic_plugins_ext/` 下的文件）。
 - **内置参考实现**：`SpectralMorphModel`（STFT 谱包络搬移，纯 Kotlin、
   无依赖），演示完整模型插件形态；RVC 插件用同一接口替换其内部为
   ONNX Runtime 推理即可。
@@ -214,7 +248,10 @@ interface ModelVoicePlugin {
 ## 安全模型（Tier 2/3）
 
 - dex/apk 插件是**任意代码执行**（拥有 App 全部权限）——对应权限分级
-  中的 NATIVE 级，仅在「开发者设置 → UGC 插件」显式开启后加载。
+  中的 NATIVE 级。UGC 默认关闭，需在
+  「设置 → 开发者设置 → 确认免责声明」后显式开启，插件才会被扫描/加载。
+- 设置页提供插件的启用 / 卸载操作；DSP 插件启用集合持久化，App 重启后
+  在 UGC 开启时自动恢复。
 - 请只安装来源可信的插件包；企业分发可另行引入签名校验。
 
 ---

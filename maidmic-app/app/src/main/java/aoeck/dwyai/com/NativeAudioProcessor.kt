@@ -38,6 +38,9 @@ object NativeAudioProcessor {
     // 上次已推送并记录日志的参数（用于高频滑块更新时的日志降级）
     private var lastLogParams: EqParams? = null
 
+    // Tier 2 DSP 链浮点转换缓冲：线程本地复用，避免音频回调内分配
+    private val dspFloatBuffer = ThreadLocal.withInitial { FloatArray(0) }
+
     private data class EqParams(
         val gainDb: Float, val bassDb: Float, val trebleDb: Float,
         val reverbMix: Float, val pitchSemitones: Int,
@@ -272,18 +275,25 @@ object NativeAudioProcessor {
         // 链为空时零开销（原子快照判空）
         if (aoeck.dwyai.com.plugins.core.DspPluginChain.snapshot().isNotEmpty()) {
             val sampleCount = size / 2
-            val floatBuf = FloatArray(sampleCount)
-            for (i in 0 until sampleCount) {
-                floatBuf[i] = ((output[i * 2].toInt() and 0xFF) or
-                        ((output[i * 2 + 1].toInt() and 0xFF) shl 8)).toShort() / 32768.0f
-            }
-            aoeck.dwyai.com.plugins.core.DspPluginChain.processThrough(floatBuf, sampleCount, 1)
-            for (i in 0 until sampleCount) {
-                var v = floatBuf[i] * 32767.0f
-                if (v > 32767.0f) v = 32767.0f
-                if (v < -32768.0f) v = -32768.0f
-                output[i * 2] = v.toInt().toByte()
-                output[i * 2 + 1] = (v.toInt() shr 8).toByte()
+            if (sampleCount > 0) {
+                // 复用线程本地浮点缓冲，避免每个音频回调分配（实时无分配约束）
+                var floatBuf = dspFloatBuffer.get()
+                if (floatBuf == null || floatBuf.size < sampleCount) {
+                    floatBuf = FloatArray(sampleCount)
+                    dspFloatBuffer.set(floatBuf)
+                }
+                for (i in 0 until sampleCount) {
+                    floatBuf[i] = ((output[i * 2].toInt() and 0xFF) or
+                            ((output[i * 2 + 1].toInt() and 0xFF) shl 8)).toShort() / 32768.0f
+                }
+                aoeck.dwyai.com.plugins.core.DspPluginChain.processThrough(floatBuf, sampleCount, 1)
+                for (i in 0 until sampleCount) {
+                    var v = floatBuf[i] * 32767.0f
+                    if (v > 32767.0f) v = 32767.0f
+                    if (v < -32768.0f) v = -32768.0f
+                    output[i * 2] = v.toInt().toByte()
+                    output[i * 2 + 1] = (v.toInt() shr 8).toByte()
+                }
             }
         }
     }

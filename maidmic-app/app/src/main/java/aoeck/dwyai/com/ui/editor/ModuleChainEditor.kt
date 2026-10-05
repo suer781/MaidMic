@@ -206,6 +206,7 @@ fun ModuleChainEditor(
                 nodes = nodes,
                 onAddModule = onAddModule,
                 onRemoveModule = onRemoveModule,
+                onReorderModule = onReorderModule,
                 onToggleBypass = onToggleBypass,
                 onParamChange = onParamChange
             )
@@ -624,37 +625,31 @@ fun DagEditor(
     nodes: List<PipelineNode>,
     onAddModule: (Int) -> Unit,
     onRemoveModule: (Int) -> Unit,
+    onReorderModule: (Int, Int) -> Unit,
     onToggleBypass: (Int) -> Unit,
     onParamChange: (Int, String, Float) -> Unit
 ) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        // 明确标注 DAG 可视化编辑器尚未实现，不再静默吞掉用户操作
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Text(
-                "🔀 DAG Mode",
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "Visual node editor coming soon.\nFor now, switch to Simple mode.",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // 兜底：DAG 模式下也显示简易列表
-            // Fallback: show simple list in DAG mode for now
-            SimpleEditor(
-                nodes = nodes,
-                onAddModule = onAddModule,
-                onRemoveModule = onRemoveModule,
-                onReorderModule = { _, _ -> },  // DAG 模式下不可拖拽排序
-                onToggleBypass = onToggleBypass,
-                onParamChange = onParamChange
+                "⚠ DAG 可视化编辑器尚未实现。当前以线性模式展示，排序/旁路/参数仍可用。",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(12.dp)
             )
         }
+        // 以线性模式兜底渲染，保留全部操作（含排序），避免静默失效
+        SimpleEditor(
+            nodes = nodes,
+            onAddModule = onAddModule,
+            onRemoveModule = onRemoveModule,
+            onReorderModule = onReorderModule,
+            onToggleBypass = onToggleBypass,
+            onParamChange = onParamChange
+        )
     }
 }

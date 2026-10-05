@@ -29,16 +29,21 @@ MaidMic 是一个开源的 Android 变声录音工具，搭载自研 **Echio 变
 - **合唱** — 三路调制延迟（相位 0°/120°/240°）
 - **降比特** — 位深量化 + 采样率保持（Lo-Fi / 机器人）
 
-### 🔌 插件系统（三层架构，万物皆插件）
+### 🔌 插件系统（三层架构，万物皆插件，全部可用）
 - **Tier 1 参数插件**（Lua 沙箱）：`maidmic.set_param("pitch_semitones", 7)`
-  组合引擎参数；内置电话音 / 花栗鼠 / 低沉大叔示例
+  组合引擎参数；内置电话音 / 花栗鼠 / 低沉大叔示例（首启自动释放到插件目录）
 - **Tier 2 DSP 插件**（dex，UGC 门控）：实现 `DspAudioPlugin` 接口的
   **自定义实时音频处理**，DexClassLoader 加载挂入实时链
-  （示例工程 `examples/dsp-plugin/` 一键构建插件 apk）
+  （示例工程 `examples/dsp-plugin/` 直接构建插件 apk）
 - **Tier 3 模型插件**（dex，UGC 门控）：实现 `ModelVoicePlugin` 接口的
   **自定义模型离线转换**——RVC 等推理模型实现同一接口即可接入，
   宿主只认 PCM 进出；内置 STFT 谱包络变换参考模型
-- 设置页 → 插件：分组列表、一键激活、应用到语音包
+- **UGC 开关**：设置 → 开发者设置 → 确认免责声明后开启 UGC；
+  开启后可扫描 / 启用 / 卸载扩展插件（dex/apk）
+- **模型插件**：设置 → 插件 → 模型插件，「应用到最近语音包」
+  生成新语音包（不覆盖原包）；内置参考模型同样支持
+- **DSP 插件状态持久化**：启用集合写入 SharedPreferences，
+  App 重启后自动恢复上次启用的 DSP 插件链
 - 沙箱与权限分级：Lua 全沙箱；dex 插件为 NATIVE 级（任意代码执行），
   需开发者设置开启 UGC 后加载
 - 开发指南见 [PLUGIN_API.md](PLUGIN_API.md)
@@ -60,7 +65,25 @@ MaidMic 是一个开源的 Android 变声录音工具，搭载自研 **Echio 变
 - **拖动 + 边缘吸附**：松手弹性吸附到最近的左右边缘，位置持久化（重启恢复）；
   IDLE 态贴边后自动半透明，触摸即恢复
 - 面板：录音 / EQ与增益 / 变音 / 快捷音效库 四页，点外部收起
-- 模块链编辑器：DSP 模块增删、排序、旁路，实时生效
+- 模块链编辑器：DSP 模块增删、排序、旁路，实时生效（当前为线性模式）
+
+### ⚠️ 当前限制 / 占位
+
+以下为如实标注的未完成或占位项，与代码现状一致：
+
+- **采样率设置实际钳制到 48kHz**：设置页提供 44.1kHz / 48kHz 选项，但录音器、
+  引擎与 DSP 插件链统一按 48kHz 运行，非 48k 选择会被钳到 48k。
+- **DAG 可视化编辑器未实现**：模块链编辑器当前只有线性模式（增删/排序/旁路/
+  参数可用）；开发者设置中的 DAG 模式切换仍为占位，选中后以线性模式兜底展示。
+- **后台保活服务默认关闭**：悬浮球/前台保活服务默认不启动，需在设置中显式开启
+  并授予悬浮窗权限；引导页的「后台保活」仅引导加入电池优化白名单。
+- **Shizuku / 无障碍 / Root 虚拟麦克风桥为存根未实现**：JNI 侧仅有满足链接的
+  存根函数，Root 桥的 Kotlin 类尚不存在；实时监听/虚拟麦克风注入不在当前产品形态内。
+- **streaming 无 UI**：双设备音频流（Wi-Fi UDP / 蓝牙）仅有底层
+  `streaming/` 包与连接管理器，App 内没有可用界面。
+- **示例插件工程需要 Android SDK 路径**：`examples/dsp-plugin` 构建时通过
+  `local.properties` 的 `sdk.dir` 或 `ANDROID_HOME` 环境变量定位 SDK，
+  否则 Gradle 会报错提示。
 
 ### 🎤 预录音变声
 - 录音时实时应用 DSP 效果，直接存为语音包（WAV），随时外放
@@ -82,6 +105,23 @@ CI 自动构建 APK，推送到 `main` 分支即可触发。
 cd maidmic-app
 ./gradlew assembleDebug
 ```
+
+### 构建示例 DSP 插件
+
+仓库已为 `examples/dsp-plugin` 补全 Gradle wrapper，可直接构建：
+
+```bash
+cd examples/dsp-plugin
+./gradlew assembleRelease
+```
+
+产物为 `build/outputs/plugin_ringmod.apk`（内含 `classes.dex` + `plugin.json`），
+拷到手机 `Android/data/aoeck.dwyai.com/files/maidmic_plugins_ext/`，
+在设置 → 插件 → 扩展插件中启用即可。
+
+> 构建需要本机 Android SDK：在 `examples/dsp-plugin/local.properties` 配置
+> `sdk.dir`（如 `sdk.dir=C\:\\AndroidSdk`）或设置 `ANDROID_HOME` 环境变量；
+> 插件接口副本 `DspAudioPlugin.kt` 是随插件一起编译进 dex 的普通源文件。
 
 ### 依赖
 

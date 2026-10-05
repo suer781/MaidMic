@@ -1,6 +1,6 @@
 # MaidMic 开发状态 📋
 
-> 最后更新：2026-09-05
+> 最后更新：2026-10-05
 
 ## 当前状态：DSP 引擎 v3 大修完成（变声质量重做）
 
@@ -129,14 +129,19 @@ JNI 三个桥（get/set_param、load_preset）是空壳、设置页入口被注�
 
 ## 🌌 三层通用插件架构（2026-09-06，"万物皆插件"）
 
+> **2026-10 状态更新**：插件系统已全部开放落地——
+> UGC 开关在开发者设置确认免责声明后真正开启，设置页可扫描/启用/卸载
+> 扩展插件，外部模型插件可「应用到最近语音包」，DSP 插件状态持久化并在
+> 启动后自动恢复，示例工程可直接构建，Lua 沙箱已完成加固。
+
 在参数型插件之上，把插件体系扩展为**三层能力模型**——自定义 DSP 与
 自定义模型（RVC 类）都可以作为插件装载：
 
 | 层级 | 形式 | 能力 | 状态 |
 |------|------|------|------|
-| Tier 1 PARAM | Lua 沙箱 | 参数型效果 | ✅（上一轮） |
-| Tier 2 DSP | dex/apk（UGC 门控） | 自定义实时音频处理，挂入实时链 | ✅ 本轮 |
-| Tier 3 MODEL | dex/apk（UGC 门控） | 自定义模型离线转换（RVC 接入面） | ✅ 本轮 |
+| Tier 1 PARAM | Lua 沙箱 | 参数型效果 | ✅（沙箱已加固，扫描不执行脚本） |
+| Tier 2 DSP | dex/apk（UGC 门控） | 自定义实时音频处理，挂入实时链 | ✅（UGC 已开放，可启用/卸载，状态持久化+启动恢复） |
+| Tier 3 MODEL | dex/apk（UGC 门控） | 自定义模型离线转换（RVC 接入面） | ✅（UGC 已开放，可应用到最近语音包） |
 
 - **统一契约**（`plugins/core/MaidMicPluginApi.kt`）：
   `DspAudioPlugin`（init/process 逐块浮点域原地处理/release）、
@@ -147,20 +152,45 @@ JNI 三个桥（get/set_param、load_preset）是空壳、设置页入口被注�
   （classes.dex + plugin.json 清单），扫描 `maidmic_plugins_ext/`，
   probe 无副作用探测插件类型
 - **实时链集成**：`DspPluginChain` 原子快照无锁挂入
-  `NativeAudioProcessor.processAudio`（引擎后串行），坏插件异常自动停用
+  `NativeAudioProcessor.processAudio`（引擎后串行），坏插件异常自动停用；
+  启用集合写入 SharedPreferences，启动时 `restore()` 自动重载上次启用的 DSP 插件
 - **离线模型流程**：`ModelRunner` 读语音包（新 WavReader）→ convert →
-  写新 WAV → 存为新语音包（不覆盖原包）
+  写新 WAV → 存为新语音包（不覆盖原包）；设置页提供「应用到最近语音包」按钮
 - **内置参考模型**：`SpectralMorphModel`（STFT 谱包络搬移，纯 Kotlin
   FFT，无依赖）——真 RVC 插件用 ONNX Runtime 实现同一接口替换
-- **UGC 权限门**：dex 插件为任意代码执行（NATIVE 级），仅在开发者
-  设置 → UGC 插件开启后扫描加载
-- **示例工程**：`examples/dsp-plugin/`（环形调制机器人插件），
-  `./gradlew assembleRelease` 自动产出可直接安装的插件 apk
+- **UGC 权限门**：dex 插件为任意代码执行（NATIVE 级），仅在
+  设置 → 开发者设置 → **确认免责声明**后开启 UGC 才扫描加载；
+  设置页可扫描 / 启用 / 卸载扩展插件（DSP 与模型插件）
+- **Lua 沙箱加固**：移除 `luajava/load/loadstring/package/require/dofile/loadfile/io/os/debug/coroutine`，
+  只暴露 `maidmic.*` API；`set_param` 拒绝 NaN/Inf；死循环由
+  `debug.sethook` 指令计数超时中断；插件扫描仅纯文本解析 `plugin_info`，
+  不执行 Lua 顶层代码（`http_get/exec` 占位已移除）
+- **示例工程**：`examples/dsp-plugin/`（环形调制机器人插件）已补 Gradle
+  wrapper，`cd examples/dsp-plugin && ./gradlew assembleRelease`
+  产出 `build/outputs/plugin_ringmod.apk`（classes.dex + plugin.json）；
+  构建需 Android SDK（`local.properties` 的 `sdk.dir` 或 `ANDROID_HOME`）
 - **文档**：PLUGIN_API.md 扩展为三层架构指南（含 RVC 插件实现要点）
 
-设计边界（如实说明）：本轮交付的是**架构与参考实现**——实时 RVC 的
-完整推理需要 ONNX Runtime 依赖与数百 MB 模型文件，无法凭空内置；
-但模型插件接口即 RVC 接入面，社区可按 PLUGIN_API.md 自行打包。
+设计边界（如实说明）：插件体系已落地可用，但内置的 Tier 3 是
+**无依赖参考实现**（谱包络搬移）——实时 RVC 的完整推理需要 ONNX Runtime
+依赖与数百 MB 模型文件，无法凭空内置；模型插件接口即 RVC 接入面，
+社区可按 PLUGIN_API.md 自行打包。
+
+---
+
+## ⚠️ 已知问题 / 当前限制
+
+以下为代码现状中如实存在的限制（部分为占位）：
+
+| 限制 | 说明 |
+|------|------|
+| 采样率钳制 48kHz | 设置页可选 44.1/48kHz，但录音器、引擎与 DSP 插件链实际统一按 48kHz 运行，非 48k 选择被钳到 48k |
+| DAG 可视化编辑器占位 | 模块链编辑器仅线性模式可用；DAG 模式切换为占位，选中后以线性模式兜底并提示未实现 |
+| 虚拟麦克风桥接为存根 | Shizuku / 无障碍 / Root 桥的 JNI 仅为满足链接的存根，Root 桥 Kotlin 类不存在，实时监听不在当前形态 |
+| streaming 无 UI | `streaming/` 底层（Wi-Fi UDP / 蓝牙）存在但 App 内无可用界面 |
+| 后台保活默认关闭 | 悬浮球/前台保活服务默认不启动，需设置中显式开启并授权悬浮窗 |
+| AutoTune/Presence/VoiceprintMask 未接 UI | 引擎与 JNI 已实现、可自动挂载，但 App 主界面/编辑器调色板未暴露入口（NoiseGate/Limiter 可在模块链编辑器手动挂载） |
+| 示例插件构建依赖本机 SDK | `examples/dsp-plugin` 需要 `local.properties` 的 `sdk.dir` 或 `ANDROID_HOME` |
 
 ---
 
@@ -189,14 +219,21 @@ JNI 三个桥（get/set_param、load_preset）是空壳、设置页入口被注�
 - [x] 四 Tab 主界面 + 悬浮球
 - [x] 音效库 + 语音包（录音→变声→存包→外放）
 - [x] Material 3 暗色主题 + 前台保活 + 状态持久化
+- [x] **插件系统全链路可用**：
+  - [x] Tier 1 Lua 参数插件（沙箱加固：危险全局移除、指令计数超时、扫描不执行）
+  - [x] Tier 2 DSP dex 插件（UGC 开放：扫描/启用/卸载/状态持久化/启动恢复）
+  - [x] Tier 3 模型插件（UGC 开放：「应用到最近语音包」+ 内置参考模型）
+  - [x] 示例工程 `examples/dsp-plugin` 可直接 `./gradlew assembleRelease` 构建
 
 ## 📅 未来可能实现
 
 1. **真机冒烟**：录音→处理→重放链路听感验收（本轮 DSP 需人耳确认）
 2. **共振峰级自适应阶数**：按 sr_low 自动选择 14~20 阶
-3. **Auto-Tune UI 接入** — 引擎 + JNI 已就绪，缺 App 端入口
-4. **PC 协同（非实时方向）** — 已有 streaming 雏形
-5. **AI 音色转换（RVC 式）** — AAL 加速层已预留接口
+3. **Auto-Tune / Presence / VoiceprintMask UI 接入** — 引擎 + JNI 已就绪，
+   默认链与编辑器调色板暂未暴露
+4. **PC 协同（非实时方向）** — 已有 streaming 雏形，App 内无 UI
+5. **真 RVC 模型插件** — 模型插件接口已就绪，社区可用 ONNX Runtime 实现
+   同接口替换内置参考模型
 
 ---
 

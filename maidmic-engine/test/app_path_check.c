@@ -230,10 +230,13 @@ int main(void) {
 
     // 完整性：out2 中 in 的内容窗口相关（取 2.0s 处输入窗，在 out2 中
     // 搜索最大相关的延迟偏移，应 ≈ 链路延迟 0.05~0.25s）
+    // 注：变调信号与输入非纯延迟关系（波形被重采样），周期信号原始互相关会在
+    // 远小于真实延迟的滞后处出现伪峰。VoiceTransform 为流级延迟（>1500 样本），
+    // 故搜索下界设为 1500，排除伪峰。
     const uint32_t win = (uint32_t)(0.2f * SR);
     const uint32_t probe = (uint32_t)(1.5f * SR);
     double best_corr = -1e30; uint32_t best_lag = 0;
-    for (uint32_t lag = 0; lag < (uint32_t)(0.4f * SR); lag += 8) {
+    for (uint32_t lag = 1500; lag < (uint32_t)(0.4f * SR); lag += 8) {
         double c = 0.0;
         for (uint32_t i = 0; i < win; i += 4) {
             c += (double)in[probe + i] * out2[probe + lag + i];
@@ -241,7 +244,7 @@ int main(void) {
         if (c > best_corr) { best_corr = c; best_lag = lag; }
     }
     P("4) 链路延迟: %u 样本 (%.1f ms)（应 2000~12000，相关法受周期性干扰为近似值）\n", best_lag, best_lag * 1000.0f / SR);
-    if (best_lag < 1500 || best_lag > 12000) {
+    if (best_lag < 2000 || best_lag > 12000) {
         P("   FAIL: 链路延迟超出预期范围\n"); fails++;
     } else P("   PASS\n");
     free(out2);

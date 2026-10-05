@@ -38,6 +38,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+// 部分严格 -std=c11 环境不定义 M_PI，此处提供 fallback
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 // ============================================================
 // 常量
 // Constants
@@ -83,7 +88,8 @@ typedef struct {
     float* xlow;             // 低速率原始信号环
     float* ola;              // 低速率 OLA 环（含移包络重建）
     uint64_t xlw;            // 低速率已抽取样本数（绝对）
-    uint64_t anchor_l;       // 低速率下一帧锚点
+    uint64_t anchor_l;        // 低速率下一帧锚点
+    uint64_t ola_wm;         // OLA 已完全消费水位（绝对低速率序号；低于该值的槽可安全清零复用）
     float* frame_x;          // 低速率帧 [ft_wl]
     float* frame_e;          // 激励残差 [ft_wl]
     float* frame_s;          // 合成输出 [ft_wl]
@@ -348,6 +354,7 @@ static void vt_reset_channel(vt_data_t* v, uint32_t ch) {
     c->fir_cnt = 0;
     c->xlw = 0;
     c->anchor_l = 0;
+    c->ola_wm = 0;
     c->g2 = 1.0f;
     c->c_cur = 1.0f;
     if (c->ps) mm_psola_reset(c->ps);
@@ -763,7 +770,13 @@ static void vt_formant_process(vt_data_t* v, vt_channel_t* c,
         // Hann² @ 75% 重叠和 = 1.5 → 归一 2/3
         const float norm = (2.0f / 3.0f) * c->g2;
         for (uint32_t i = 0; i < W; i++) {
-            c->ola[(size_t)((anchor + i) & VT_LOW_MASK)] +=
+            const uint64_t s = anchor + i;
+            // 环回绕后，若该槽上一次写入的内容已被发射完全消费（低于消费水位
+            // ola_wm），先清零再累加，避免旧 OLA 值叠加到新帧产生"幽灵回声"。
+            if (s >= VT_LOW_CAP && (s - VT_LOW_CAP) < c->ola_wm) {
+                c->ola[(size_t)(s & VT_LOW_MASK)] = 0.0f;
+            }
+            c->ola[(size_t)(s & VT_LOW_MASK)] +=
                 c->frame_s[i] * v->ft_window[i] * norm;
         }
 
@@ -802,6 +815,22 @@ static void vt_formant_process(vt_data_t* v, vt_channel_t* c,
 
         // 4.3 输出 = 延迟对齐的原信号 + 校正（写入本块输出偏移 m − base）
         out[i] = y;
+    }
+
+    // ---- 4.4 更新 OLA 消费水位 ----
+    // 每个 ola[nl] 槽被多相内插读取多次（D≥2 时每个残差类各读一次），
+    // 最后一次读取发生在 me = nl*D + (VT_FIR_TAPS-1)。因此本块发射推进到
+    // last_me 后，所有 nl <= (last_me - (VT_FIR_TAPS-1))/D 的槽已完全消费，
+    // 后续帧累加前可安全清零。D=1 时槽 nl 仅在 me=nl 读取一次。
+    const uint64_t last_m = base + n - 1u;
+    const uint64_t last_me = (last_m > extra) ? (last_m - extra) : 0u;
+    if (D >= 2u) {
+        if (last_me >= VT_FIR_TAPS - 1u) {
+            const uint64_t wm = (last_me - (VT_FIR_TAPS - 1u)) / D + 1u;
+            if (wm > c->ola_wm) c->ola_wm = wm;
+        }
+    } else {
+        if (last_me + 1u > c->ola_wm) c->ola_wm = last_me + 1u;
     }
 }
 

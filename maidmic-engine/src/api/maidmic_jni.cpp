@@ -232,6 +232,9 @@ static void set_default_param(uint32_t module_id, uint32_t* cached,
     }
 }
 
+// 前向声明：定义见"可选效果模块动态挂载"节（set_noisegate/limiter 先于其定义使用）
+static uint32_t ensure_module_mounted(uint32_t module_id, uint32_t* cached);
+
 // ============================================================
 // Utils
 // ============================================================
@@ -333,18 +336,24 @@ void set_noisegate_params(float threshold_db, float attack_ms, float release_ms)
     ensure_default_pipeline();
     if (!g_default_pipeline) return;
 
+    // 模块缺失时自动挂载（默认旁路），使参数设置真正生效而非静默跳过
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_NOISEGATE, &g_default_nodes.noisegate);
+    if (!node) {
+        LOGE("set_noisegate_params: noisegate module unavailable");
+        return;
+    }
+
     maidmic_param_t param;
     param.type = MAIDMIC_PARAM_FLOAT;
 
-    // 管线可能被 Kotlin 侧重建，节点 id 必须动态解析
     param.value.as_float = clamp(threshold_db, -100.0f, 0.0f);
-    set_default_param(MAIDMIC_MODULE_ID_NOISEGATE, &g_default_nodes.noisegate, "gate_threshold", param);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "gate_threshold", param);
 
     param.value.as_float = clamp(attack_ms, 0.0f, 200.0f);
-    set_default_param(MAIDMIC_MODULE_ID_NOISEGATE, &g_default_nodes.noisegate, "gate_attack", param);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "gate_attack", param);
 
     param.value.as_float = clamp(release_ms, 0.0f, 2000.0f);
-    set_default_param(MAIDMIC_MODULE_ID_NOISEGATE, &g_default_nodes.noisegate, "gate_release", param);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "gate_release", param);
 }
 
 // ============================================================
@@ -355,15 +364,21 @@ void set_limiter_params(float threshold_db, float release_ms) {
     ensure_default_pipeline();
     if (!g_default_pipeline) return;
 
+    // 模块缺失时自动挂载（默认旁路），使参数设置真正生效而非静默跳过
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_LIMITER, &g_default_nodes.limiter);
+    if (!node) {
+        LOGE("set_limiter_params: limiter module unavailable");
+        return;
+    }
+
     maidmic_param_t param;
     param.type = MAIDMIC_PARAM_FLOAT;
 
-    // 管线可能被 Kotlin 侧重建，节点 id 必须动态解析
     param.value.as_float = clamp(threshold_db, -60.0f, 0.0f);
-    set_default_param(MAIDMIC_MODULE_ID_LIMITER, &g_default_nodes.limiter, "limiter_threshold", param);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "limiter_threshold", param);
 
     param.value.as_float = clamp(release_ms, 1.0f, 1000.0f);
-    set_default_param(MAIDMIC_MODULE_ID_LIMITER, &g_default_nodes.limiter, "limiter_release", param);
+    maidmic_pipeline_set_param(g_default_pipeline, node, "limiter_release", param);
 }
 
 // ============================================================
@@ -373,6 +388,7 @@ void set_limiter_params(float threshold_db, float release_ms) {
 // Kotlin 侧 initDefaultChain 重建链后镜像不含动态挂载模块，挂载即重新生效。
 
 // 确保模块在默认管线中，返回节点 ID（失败返回 0）
+// 新挂载的模块默认置为 bypass（不参与处理），由各 setter 按需解除旁路。
 static uint32_t ensure_module_mounted(uint32_t module_id, uint32_t* cached) {
     ensure_default_pipeline();
     if (!g_default_pipeline) return 0;
@@ -386,7 +402,9 @@ static uint32_t ensure_module_mounted(uint32_t module_id, uint32_t* cached) {
     node = maidmic_pipeline_add_module(g_default_pipeline, module);
     if (node != 0) {
         *cached = node;
-        LOGI("ensure_module_mounted: module %u mounted as node %u", module_id, node);
+        // 默认旁路：模块挂载但不改变音频，直到调用方显式启用
+        maidmic_pipeline_set_module_bypass(g_default_pipeline, node, true);
+        LOGI("ensure_module_mounted: module %u mounted as node %u (bypass)", module_id, node);
     }
     return node;
 }
@@ -492,13 +510,11 @@ Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetAutoTune(
     JNIEnv* env, jclass clazz,
     jboolean enabled, jint scale, jfloat retune, jfloat speed) {
     (void)env; (void)clazz;
-    ensure_default_pipeline();
-    if (!g_default_pipeline) return;
 
-    // 管线可能被 Kotlin 侧重建，节点 id 必须动态解析
-    uint32_t node = resolve_default_node(MAIDMIC_MODULE_ID_AUTOTUNE, &g_default_nodes.autotune);
+    // 模块不在默认链时自动挂载（默认旁路），使参数设置真正生效
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_AUTOTUNE, &g_default_nodes.autotune);
     if (!node) {
-        LOGE("nativeSetAutoTune: autotune module not found in default pipeline");
+        LOGE("nativeSetAutoTune: autotune module unavailable");
         return;
     }
 
@@ -595,13 +611,11 @@ JNIEXPORT void JNICALL
 Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetPresence(
     JNIEnv* env, jclass clazz, jfloat presence_db) {
     (void)env; (void)clazz;
-    ensure_default_pipeline();
-    if (!g_default_pipeline) return;
 
-    // 管线可能被 Kotlin 侧重建，节点 id 必须动态解析
-    uint32_t node = resolve_default_node(MAIDMIC_MODULE_ID_PRESENCE, &g_default_nodes.presence);
+    // 模块不在默认链时自动挂载（默认旁路），使参数设置真正生效
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_PRESENCE, &g_default_nodes.presence);
     if (!node) {
-        LOGE("nativeSetPresence: presence module not found in default pipeline");
+        LOGE("nativeSetPresence: presence module unavailable");
         return;
     }
 
@@ -621,13 +635,11 @@ JNIEXPORT void JNICALL
 Java_aoeck_dwyai_com_NativeAudioProcessor_nativeSetVoiceprintMask(
     JNIEnv* env, jclass clazz, jfloat strength, jint mode) {
     (void)env; (void)clazz;
-    ensure_default_pipeline();
-    if (!g_default_pipeline) return;
 
-    // 管线可能被 Kotlin 侧重建，节点 id 必须动态解析
-    uint32_t node = resolve_default_node(MAIDMIC_MODULE_ID_VOICEPRINT_MASK, &g_default_nodes.voiceprint_mask);
+    // 模块不在默认链时自动挂载（默认旁路），使参数设置真正生效
+    uint32_t node = ensure_module_mounted(MAIDMIC_MODULE_ID_VOICEPRINT_MASK, &g_default_nodes.voiceprint_mask);
     if (!node) {
-        LOGE("nativeSetVoiceprintMask: voiceprint_mask module not found in default pipeline");
+        LOGE("nativeSetVoiceprintMask: voiceprint_mask module unavailable");
         return;
     }
 

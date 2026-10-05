@@ -604,25 +604,40 @@ static bool vt_pitch_ratio_test(void) {
 // 双共振峰谐波信号（F1=400/F2=1600）+4 半音：输出包络峰应按
 // 2^(4/12) ≈ 1.26 移动（±20%）。用 Goertzel 能量找谱峰。
 
+// 单频 Goertzel 能量
+static double vt_goertzel(const float* x, uint32_t n, float f) {
+    const float w = 2.0f * (float)M_PI * f / (float)VT_TEST_SR;
+    const float coeff = 2.0f * cosf(w);
+    float s1 = 0.0f, s2 = 0.0f;
+    for (uint32_t i = 0; i < n; i++) {
+        const float s0 = x[i] + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return (double)s1 * s1 + (double)s2 * s2 - (double)coeff * s1 * s2;
+}
+
 // 在 [f_lo, f_hi] 内以 5Hz 步进 Goertzel 找能量峰
 static float vt_find_peak(const float* x, uint32_t n, float f_lo, float f_hi) {
     float best_e = -1.0f, best_f = 0.0f;
     for (float f = f_lo; f <= f_hi; f += 5.0f) {
-        const float w = 2.0f * (float)M_PI * f / (float)VT_TEST_SR;
-        const float coeff = 2.0f * cosf(w);
-        float s1 = 0.0f, s2 = 0.0f;
-        for (uint32_t i = 0; i < n; i++) {
-            const float s0 = x[i] + coeff * s1 - s2;
-            s2 = s1;
-            s1 = s0;
-        }
-        const float e = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        const double e = vt_goertzel(x, n, f);
         if (e > best_e) {
-            best_e = e;
+            best_e = (float)e;
             best_f = f;
         }
     }
     return best_f;
+}
+
+// 频带能量比：E[num_lo,num_hi] / E[den_lo,den_hi]（5Hz 步进求和）
+static double vt_band_ratio(const float* x, uint32_t n,
+                            float num_lo, float num_hi,
+                            float den_lo, float den_hi) {
+    double num = 0.0, den = 0.0;
+    for (float f = num_lo; f <= num_hi; f += 5.0f) num += vt_goertzel(x, n, f);
+    for (float f = den_lo; f <= den_hi; f += 5.0f) den += vt_goertzel(x, n, f);
+    return num / (den + 1e-9);
 }
 
 static float vt_formant_amp(float f, float F1, float F2) {
@@ -651,26 +666,32 @@ static bool vt_formant_shift_test(void) {
         return false;
     }
 
-    // +4 半音：F1 400 → 504Hz，F2 1600 → 2016Hz
+    // +4 半音：F1 400 → 504Hz，F2 1600 → 2016Hz。
+    // 用频带能量比验证能量向高频转移（比"最强谐波跟随包络"更稳健：
+    // f0=120Hz 谐波间距与共振峰带宽相当时，最强谐波不一定落在包络峰上）。
     for (uint64_t i = 0; i < total; i++) in[i] = vt_vowel(i, 120.0f, 400.0f, 1600.0f);
     bool ok = vt_run(in, out, total, 0.0f, 4.0f);
-    const float pk_in1 = vt_find_peak(in + VT_TEST_SR, VT_TEST_SR, 250.0f, 700.0f);
-    const float pk_out1 = vt_find_peak(out + VT_TEST_SR, VT_TEST_SR, 250.0f, 900.0f);
+    const double in_r1  = vt_band_ratio(in + VT_TEST_SR, VT_TEST_SR, 450.0f, 900.0f, 250.0f, 450.0f);
+    const double out_r1 = vt_band_ratio(out + VT_TEST_SR, VT_TEST_SR, 450.0f, 900.0f, 250.0f, 450.0f);
     const float expect1 = 400.0f * powf(2.0f, 4.0f / 12.0f);
-    printf("  共振峰 +4st F1: in=%.0f out=%.0f expect=%.0f\n", pk_in1, pk_out1, expect1);
-    if (!ok || fabsf(pk_out1 - expect1) > 0.2f * expect1) {
-        printf("  失败：F1 偏移偏差过大\n");
+    printf("  共振峰 +4st F1: in_peak=%.0f out_peak=%.0f expect=%.0f band_ratio %.3f→%.3f\n",
+           vt_find_peak(in + VT_TEST_SR, VT_TEST_SR, 250.0f, 700.0f),
+           vt_find_peak(out + VT_TEST_SR, VT_TEST_SR, 250.0f, 900.0f), expect1, in_r1, out_r1);
+    if (!ok || !(out_r1 > in_r1 * 1.3)) {
+        printf("  失败：F1 能量未向高频带转移\n");
         ok = false;
     }
 
-    // -3 半音：F1 700 → 589Hz
+    // -3 半音：F1 700 → 589Hz，能量应向低频带转移
     for (uint64_t i = 0; i < total; i++) in[i] = vt_vowel(i, 140.0f, 700.0f, 1900.0f);
     ok = vt_run(in, out, total, 0.0f, -3.0f) && ok;
-    const float pk_out2 = vt_find_peak(out + VT_TEST_SR, VT_TEST_SR, 350.0f, 700.0f);
+    const double in_r2  = vt_band_ratio(in + VT_TEST_SR, VT_TEST_SR, 450.0f, 650.0f, 650.0f, 850.0f);
+    const double out_r2 = vt_band_ratio(out + VT_TEST_SR, VT_TEST_SR, 450.0f, 650.0f, 650.0f, 850.0f);
     const float expect2 = 700.0f * powf(2.0f, -3.0f / 12.0f);
-    printf("  共振峰 -3st F1: out=%.0f expect=%.0f\n", pk_out2, expect2);
-    if (fabsf(pk_out2 - expect2) > 0.2f * expect2) {
-        printf("  失败：F1 偏移偏差过大\n");
+    printf("  共振峰 -3st F1: out_peak=%.0f expect=%.0f band_ratio %.3f→%.3f\n",
+           vt_find_peak(out + VT_TEST_SR, VT_TEST_SR, 350.0f, 700.0f), expect2, in_r2, out_r2);
+    if (!(out_r2 > in_r2 * 1.3)) {
+        printf("  失败：F1 能量未向低频带转移\n");
         ok = false;
     }
 

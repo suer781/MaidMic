@@ -120,12 +120,17 @@ class SoundEffectPlayer {
                 if (myToken == playToken) finishPlay()
                 true // 错误已处理，不再触发 OnCompletionListener
             }
-            mp.prepare()
-            mp.start()
-            mediaPlayer = mp
-            AppLogger.i(TAG, "play: ${file.name} token=$myToken")
+            // 异步 prepare，避免阻塞主线程
+            mp.setOnPreparedListener { prepared ->
+                if (myToken == playToken) {
+                    prepared.start()
+                    mediaPlayer = prepared
+                    AppLogger.i(TAG, "play: ${file.name} token=$myToken")
+                }
+            }
+            mp.prepareAsync()
         } catch (e: Exception) {
-            // prepare 可能抛 IOException 等，出错时释放本次创建的实例并走 onComplete 兜底
+            // 启动失败（如 prepareAsync 立即抛 IllegalStateException），释放并走 onComplete 兜底
             AppLogger.e(TAG, "play: 启动失败 ${file.name}", e)
             try {
                 mp?.release()

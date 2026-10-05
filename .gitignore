@@ -36,3 +36,10 @@ build_err.log
 
 # Large downloads
 *.apk
+
+# 构建产物与工具痕迹
+*.exe
+*.pdb
+*_result.txt
+*.result.txt
+.mimosa/

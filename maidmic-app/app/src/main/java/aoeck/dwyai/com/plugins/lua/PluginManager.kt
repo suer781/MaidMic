@@ -18,8 +18,9 @@
 //   <externalFilesDir>/maidmic_plugins/<file>.lua          用户/内置插件脚本
 //   <externalFilesDir>/maidmic_plugins/<pluginId>/presets/  插件预设数据（load_preset 读取）
 //
-// 安全：脚本在 LuaPluginSandbox 沙箱运行（无 io/os/debug/require），
+// 安全：脚本在 LuaPluginSandbox 沙箱运行（无 io/os/debug/require/luajava/load），
 //       只能经 maidmic.* 与引擎参数交互；激活在后台线程执行，卡死不阻塞 UI。
+//       扫描（inspect）只做纯文本解析 plugin_info 段，绝不执行脚本顶层代码。
 
 package aoeck.dwyai.com.plugins.lua
 
@@ -92,9 +93,15 @@ class PluginManager private constructor(private val context: Context) {
     private val prefs =
         context.getSharedPreferences("maidmic_prefs", Context.MODE_PRIVATE)
 
+    // ===== 加载完成回调（awaitLoaded）=====
+    @Volatile private var loaded = false
+    private val onLoadedListeners = mutableListOf<() -> Unit>()
+
     /** 插件根目录 */
-    fun pluginsDir(): File =
-        File(context.getExternalFilesDir(null), PLUGINS_DIR_NAME).apply { mkdirs() }
+    fun pluginsDir(): File {
+        val base = context.getExternalFilesDir(null) ?: context.filesDir
+        return File(base, PLUGINS_DIR_NAME).apply { mkdirs() }
+    }
 
     // ============================================================
     // 扫描
@@ -103,7 +110,7 @@ class PluginManager private constructor(private val context: Context) {
     /**
      * 扫描插件（后台线程）：
      *   1. 把 assets 内置插件释放到插件目录（已存在则跳过，用户可自行修改）
-     *   2. 扫描目录下所有 .lua，解析 plugin_info 元数据
+     *   2. 扫描目录下所有 .lua，纯文本解析 plugin_info 元数据（不执行脚本）
      */
     fun refresh() {
         Thread {
@@ -119,11 +126,41 @@ class PluginManager private constructor(private val context: Context) {
                     }
                 plugins.value = found
                 AppLogger.i(TAG, "扫描完成：${found.size} 个插件 (${found.joinToString { it.id }})")
+                notifyLoaded()
             } catch (e: Exception) {
                 AppLogger.e(TAG, "扫描插件失败", e)
                 lastError.value = "扫描插件失败: ${e.message}"
+                notifyLoaded()
             }
         }.start()
+    }
+
+    /**
+     * 等待首次扫描完成后再执行回调（用于启动时恢复上次激活插件）。
+     * 若已扫描完成则立即回调（在调用线程）。
+     */
+    fun awaitLoaded(callback: () -> Unit) {
+        if (loaded) {
+            callback()
+            return
+        }
+        synchronized(onLoadedListeners) {
+            if (loaded) {
+                callback()
+            } else {
+                onLoadedListeners.add(callback)
+            }
+        }
+    }
+
+    private fun notifyLoaded() {
+        val listeners: List<() -> Unit>
+        synchronized(onLoadedListeners) {
+            loaded = true
+            listeners = onLoadedListeners.toList()
+            onLoadedListeners.clear()
+        }
+        listeners.forEach { it() }
     }
 
     /** 释放 assets 内置插件（同名跳过） */
@@ -143,22 +180,19 @@ class PluginManager private constructor(private val context: Context) {
         }
     }
 
-    /** 加载脚本并解析元数据（轻量：只在扫描线程执行一次） */
+    /**
+     * 解析插件元数据（只做纯文本解析，不加载/不执行脚本）。
+     * 解析失败返回 null（插件不进列表）。
+     */
     private fun inspect(file: File): PluginInfo? {
         return try {
-            val sandbox = LuaPluginSandbox(
-                pluginId = file.nameWithoutExtension,
-                pluginName = file.nameWithoutExtension,
-                permissionLevel = PluginPermissionLevel.SANDBOX,
-            )
-            sandbox.load(file.readText())
-            val info = sandbox.metadata()
+            val meta = parsePluginInfo(file.readText())
             PluginInfo(
                 id = file.nameWithoutExtension,
-                name = info?.get("name") as? String ?: file.nameWithoutExtension,
-                author = info?.get("author") as? String ?: "未知",
-                version = (info?.get("version") as? Double)?.toInt() ?: 1,
-                description = info?.get("description") as? String ?: "",
+                name = meta?.get("name") as? String ?: file.nameWithoutExtension,
+                author = meta?.get("author") as? String ?: "未知",
+                version = (meta?.get("version") as? Double)?.toInt() ?: 1,
+                description = meta?.get("description") as? String ?: "",
                 source = PluginInfo.Source.USER,  // 释放到目录后统一视为用户插件
                 file = file,
             )
@@ -166,6 +200,36 @@ class PluginManager private constructor(private val context: Context) {
             AppLogger.e(TAG, "插件解析失败: ${file.name}", e)
             null  // 解析失败的插件不进列表（避免激活必然报错）
         }
+    }
+
+    /**
+     * 纯文本解析脚本顶部的 plugin_info 表。
+     * 约定格式：plugin_info = { name="...", author="...", version=1, description="..." }
+     * 只提取四个字段，不执行任何 Lua 代码。
+     */
+    private fun parsePluginInfo(source: String): Map<String, Any?>? {
+        val block = Regex("""plugin_info\s*=\s*\{([\s\S]*?)\}""")
+            .find(source) ?: return null
+        val body = block.groupValues[1]
+
+        fun field(key: String): String? {
+            val m = Regex("""[\s,;{]${key}\s*=\s*"([^"]*)"|[\s,;{]${key}\s*=\s*([0-9]+(?:\.[0-9]+)?)""")
+                .find(body) ?: return null
+            return m.groupValues[1].ifEmpty { m.groupValues[2] }
+        }
+
+        val name = field("name")
+        val author = field("author")
+        val description = field("description")
+        val version = field("version")?.toDoubleOrNull()
+
+        if (name == null && author == null && description == null && version == null) return null
+        val map = mutableMapOf<String, Any?>()
+        name?.let { map["name"] = it }
+        author?.let { map["author"] = it }
+        description?.let { map["description"] = it }
+        version?.let { map["version"] = it }
+        return map
     }
 
     // ============================================================
@@ -208,6 +272,7 @@ class PluginManager private constructor(private val context: Context) {
                     activePluginId.value = info.id
                     setState(info.id, PluginState.ACTIVE)
                     lastError.value = null
+                    saveActiveState()
                     AppLogger.i(TAG, "插件已激活: ${info.id}")
                 } catch (e: Exception) {
                     AppLogger.e(TAG, "插件激活失败: $pluginId", e)
@@ -215,6 +280,7 @@ class PluginManager private constructor(private val context: Context) {
                     activeSandbox = null
                     activePluginId.value = null
                     setState(pluginId, PluginState.ERROR)
+                    saveActiveState()
                 }
             }
         }.start()
@@ -233,6 +299,7 @@ class PluginManager private constructor(private val context: Context) {
                 activeSandbox = null
                 activePluginId.value = null
                 setState(id, PluginState.IDLE)
+                saveActiveState()
                 AppLogger.i(TAG, "插件已停用: $id")
             }
         }.start()

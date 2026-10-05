@@ -435,6 +435,9 @@ class FloatingBallView(context: Context) : View(context) {
                 isDragging = false
                 isLongPressTriggered = false
 
+                // 面板展开时点击球 = 关闭面板：在 UP 时抑制单击，避免面板闪回
+                suppressClickOnUp = isPanelExpanded
+
                 // 触摸即恢复全亮（贴边半透明态 → 激活）
                 if (alpha < 1f) animate().alpha(1f).setDuration(120L).start()
 
